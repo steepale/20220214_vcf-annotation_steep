@@ -1,0 +1,5001 @@
+---
+title: | 
+ | Germline Variant Annotation: 
+ | VEP/SIFT/PROVEAN
+author: "Alec Steep"
+date: "02/14/2022"
+always_allow_html: true
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+    highlight: zenburn
+    css: ../style/style.css
+---
+
+# CONFIGURATIONS
+```{r setup, message=FALSE, results='hide', warning = FALSE, echo = TRUE}
+# Set the working directory and tool paths on your local computer.
+WD <- "/Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep" 
+# Set the gsutil path
+
+knitr::opts_knit$set(root.dir=WD)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+```
+
+##### CSS Top Styling
+```{r CSS Top Styling}
+write_css = FALSE
+if(write_css){
+  writeLines("td, th { padding : 3px } th { background-color:white; color:black; border:1px solid black; text-align:center } td {color:black; border:1px solid black; word-wrap:break-word; white-space:nowrap; overflow: hidden; text-overflow: ellipsis; max-width:300px; text-align:left}", con=file.path(normalizePath(WD), "style/style.css"))
+}
+```
+
+##### Goals of Analysis
+- 
+
+##### Steps in Analysis
+ 
+
+##### Takeaways
+
+# Prepare Environment & Load Data
+
+## Setup the Environment
+```{r Setup the Environment, message=FALSE, results='hide', warning = FALSE, echo = TRUE}
+################################################################################
+##### Resources and Dependencies ###############################################
+################################################################################
+# Whether to knit document and display data
+knit_time = TRUE
+save_bool = FALSE
+
+#BiocManager::install("ensemblVEP")
+
+# Load dependencies
+pacs...man <- c("tidyverse","kableExtra","devtools","glue","lubridate","gt",
+                "rtracklayer","glue","impute")
+for(pac in pacs...man){
+  suppressWarnings(suppressPackageStartupMessages(library(pac, character.only = TRUE)))
+}
+
+#browseVignettes("ensemblVEP")
+############################################################
+##### Functions ############################################
+############################################################
+
+# Name functions
+select <- dplyr::select
+map <- purrr::map
+desc <- dplyr::desc
+arrange <- dplyr::arrange
+melt <- reshape2::melt
+mutate <- dplyr::mutate
+glue <- glue::glue
+
+# Global options
+options(dplyr.print_max = 100)
+options(scipen=10000)
+
+# Colors
+redblue100<-rgb(read.table(paste0(WD,'/colors/redblue100.txt'),sep='\t',row.names=1,header=T))
+```
+
+# Source functions
+```{r}
+source(glue("{WD}/functions/20220214_LoadVepVcf.R"))
+```
+
+# Source of Germline Variant Calls
+Germline variants were received from Maria Luisa Martin Cerezo (Marisa) and Dominic Wright on February 14, 2022.
+
+# Source of Annotation Files
+- GalGal4 Reference Genome File
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal4/bigZips/
+- GalGal5 Reference Genome File and dictionary
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal5/bigZips/
+- Gg4 to Gg5 chain file
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal4/liftOver/
+
+# Perform a LiftOver of the g.vcf files via picard
+#Pull the image if neccessary
+docker pull broadinstitute/gatk:latest
+# docker needs permission to bind to directory on mac, see link: https://docs.docker.com/desktop/mac/
+# start up the GATK container with the working directory mounted in
+docker run -v /Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep/data:/gatk/bermuda_data -it broadinstitute/gatk:latest
+gatk CreateSequenceDictionary -R ./bermuda_data/galGal5.fa -O ./bermuda_data/galGal5.dict
+https://www.biostars.org/p/46331/
+
+# Index the file to extract certsin regions
+gatk IndexFeatureFile \
+--input ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps.vcf
+
+# Select variants over certain intervals
+gatk SelectVariants \
+--variant ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps.vcf \
+--output ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_sweeps.vcf \
+--intervals chr1:150,340,000-150,420,000 \
+--intervals chr2:94,120,000-94,220,000 \
+--intervals chr2:123,740,000-123,800,000 \
+--intervals chr2:142,940,000-143,220,000 \
+--intervals chr3:52,840,000-52,900,000 \
+--intervals chr3:92,900,000-92,960,000 \
+--intervals chr5:3,700,000-3,960,000 \
+--intervals chr7:19,320,000-19,380,000
+
+# Liftover the GG4 VCF calls to GG5
+##picard script was adjusted to allow for 40g RAM if neccessary
+##Command takes 1 hr to run
+gatk LiftoverVcf \
+-I ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_sweeps.vcf \
+-O ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-sweeps_steep.vcf \
+--CHAIN ./bermuda_data/galGal4ToGalGal5.over.chain \
+--REJECT ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-rejects-sweeps_steep.vcf \
+-R ./bermuda_data/galGal5.fa
+
+# Collect chromosome 7
+gatk SelectVariants \
+--variant ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps.vcf \
+--output ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_chr7.vcf \
+--intervals chr7
+
+# Liftover chromosome 7 genome
+gatk LiftoverVcf \
+-I ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_chr7.vcf \
+-O ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-chr7_steep.vcf \
+--CHAIN ./bermuda_data/galGal4ToGalGal5.over.chain \
+--REJECT ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-rejects-chr7_steep.vcf \
+-R ./bermuda_data/galGal5.fa
+
+
+# Seperate samples via GATK (docker image)
+The Genome Analysis Toolkit (GATK) v4.2.5.0
+HTSJDK Version: 2.24.1
+Picard Version: 2.25.4
+
+samples=("DRS042875" "DRS042876" "DRS042877" "DRS042878" "DRS042879" "P4806_126" "P4806_128" "P4806_131" "P4806_132" "P4806_133" "P4806_134" "P4806_135" "P4806_136" "P4806_137" "P4806_139" "P4806_140" "P4806_141" "P4806_142" "P4806_143" "P4806_144" "P4806_157" "P4806_158" "P4806_159" "P4806_160" "P4806_161" "P4806_162" "SRP022583" "SRS1014597" "SRS1014598" "SRS1014599" "SRS1014600" "SRS1014601" "SRS1014602" "SRS1014603" "SRS1014604" "SRS1014605" "SRS1275748" "SRS1275749" "SRS1275750" "SRS1275751" "SRS1275752" "SRS1275753" "SRS1275754" "SRS1275755" "SRS426963" "SRS524482" "SRS524483" "SRS524484" "SRS524485" "SRS524486" "SRS524487" "SRS524488" "SRS524489" "SRS589235" "SRS589236" "SRS589237" "SRS589238" "SRS589239" "SRS589240" "SRS589241" "SRS589242" "SRS589243" "SRS589244" "SRS589245" "SRS589246" "SRS589247" "SRS589248" "SRS589249" "SRS589250" "SRS589251" "SRS589252" "SRS589253" "SRS589254" "SRS589255" "SRS589256" "SRS589257" "SRS589258" "SRS589259" "SRS589260" "SRS589261" "SRS589262" "SRS589263" "SRS589265" "SRS589266" "SRS810965" "SRS811020" "SRS811021" "SRS811022" "SRS811023" "SRS811024" "SRS811025" "SRS811026" "SRS811027" "ugc_586_1" "ugc_586_10" "ugc_586_11" "ugc_586_12" "ugc_586_13" "ugc_586_14" "ugc_586_15" "ugc_586_16" "ugc_586_17" "ugc_586_18" "ugc_586_19" "ugc_586_2" "ugc_586_20" "ugc_586_21" "ugc_586_22" "ugc_586_23" "ugc_586_25" "ugc_586_3" "ugc_586_4" "ugc_586_5" "ugc_586_6" "ugc_586_7" "ugc_586_8" "ugc_586_9")
+
+
+
+for sample in ${samples[@]}; do
+echo ${sample};
+gatk SelectVariants \
+--variant ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-sweeps_steep.vcf \
+--output ./bermuda_data/20220214_${sample}-gg5-snps-sweeps_steep.vcf \
+--sample-name ${sample}
+done
+
+# Exit the docker image
+exit
+
+# Pull the docker image for vep for galgal5
+docker pull steepale/vep_galgal5:release_92.1
+# Interactively run the image
+docker run -v /Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep/data:/opt/vep/src/ensembl-vep/bermuda_data -it steepale/vep_galgal5:release_92.1
+
+# List the samples to be annotated (in future, just annotate one sample, all sample share all variants in seperated VCF format)
+samples=("DRS042875" "DRS042876" "DRS042877" "DRS042878" "DRS042879" "P4806_126" "P4806_128" "P4806_131" "P4806_132" "P4806_133" "P4806_134" "P4806_135" "P4806_136" "P4806_137" "P4806_139" "P4806_140" "P4806_141" "P4806_142" "P4806_143" "P4806_144" "P4806_157" "P4806_158" "P4806_159" "P4806_160" "P4806_161" "P4806_162" "SRP022583" "SRS1014597" "SRS1014598" "SRS1014599" "SRS1014600" "SRS1014601" "SRS1014602" "SRS1014603" "SRS1014604" "SRS1014605" "SRS1275748" "SRS1275749" "SRS1275750" "SRS1275751" "SRS1275752" "SRS1275753" "SRS1275754" "SRS1275755" "SRS426963" "SRS524482" "SRS524483" "SRS524484" "SRS524485" "SRS524486" "SRS524487" "SRS524488" "SRS524489" "SRS589235" "SRS589236" "SRS589237" "SRS589238" "SRS589239" "SRS589240" "SRS589241" "SRS589242" "SRS589243" "SRS589244" "SRS589245" "SRS589246" "SRS589247" "SRS589248" "SRS589249" "SRS589250" "SRS589251" "SRS589252" "SRS589253" "SRS589254" "SRS589255" "SRS589256" "SRS589257" "SRS589258" "SRS589259" "SRS589260" "SRS589261" "SRS589262" "SRS589263" "SRS589265" "SRS589266" "SRS810965" "SRS811020" "SRS811021" "SRS811022" "SRS811023" "SRS811024" "SRS811025" "SRS811026" "SRS811027" "ugc_586_1" "ugc_586_10" "ugc_586_11" "ugc_586_12" "ugc_586_13" "ugc_586_14" "ugc_586_15" "ugc_586_16" "ugc_586_17" "ugc_586_18" "ugc_586_19" "ugc_586_2" "ugc_586_20" "ugc_586_21" "ugc_586_22" "ugc_586_23" "ugc_586_25" "ugc_586_3" "ugc_586_4" "ugc_586_5" "ugc_586_6" "ugc_586_7" "ugc_586_8" "ugc_586_9")
+
+# Annotate samples
+for sample in ${samples[@]}; do
+echo ${sample};
+vep \
+--fork 4 \
+-v \
+-i ./bermuda_data/20220214_${sample}-gg5-snps-sweeps_steep.vcf \
+-o ./bermuda_data/20220214_${sample}-gg5-snps-sweeps-vep_steep.vcf \
+--vcf \
+--cache \
+--species gallus_gallus \
+--force_overwrite \
+--sift b \
+--protein \
+--domains \
+--ccds \
+--uniprot \
+--tsl \
+--appris \
+--hgvs
+done
+
+# Exit the Docker image
+exit
+
+# Load in the vcf files
+Each file takes about 1 minute to load
+```{r}
+# Get a list of the samples to be loaded
+samples <- c("DRS042875", "DRS042876", "DRS042877", "DRS042878", "DRS042879", "P4806_126", "P4806_128", "P4806_131", "P4806_132", "P4806_133", "P4806_134", "P4806_135", "P4806_136", "P4806_137", "P4806_139", "P4806_140", "P4806_141", "P4806_142", "P4806_143", "P4806_144", "P4806_157", "P4806_158", "P4806_159", "P4806_160", "P4806_161", "P4806_162", "SRP022583", "SRS1014597", "SRS1014598", "SRS1014599", "SRS1014600", "SRS1014601", "SRS1014602", "SRS1014603", "SRS1014604", "SRS1014605", "SRS1275748", "SRS1275749", "SRS1275750", "SRS1275751", "SRS1275752", "SRS1275753", "SRS1275754", "SRS1275755", "SRS426963", "SRS524482", "SRS524483", "SRS524484", "SRS524485", "SRS524486", "SRS524487", "SRS524488", "SRS524489", "SRS589235", "SRS589236", "SRS589237", "SRS589238", "SRS589239", "SRS589240", "SRS589241", "SRS589242", "SRS589243", "SRS589244", "SRS589245", "SRS589246", "SRS589247", "SRS589248", "SRS589249", "SRS589250", "SRS589251", "SRS589252", "SRS589253", "SRS589254", "SRS589255", "SRS589256", "SRS589257", "SRS589258", "SRS589259", "SRS589260", "SRS589261", "SRS589262", "SRS589263", "SRS589265", "SRS589266", "SRS810965", "SRS811020", "SRS811021", "SRS811022", "SRS811023", "SRS811024", "SRS811025", "SRS811026", "SRS811027", "ugc_586_1", "ugc_586_10", "ugc_586_11", "ugc_586_12", "ugc_586_13", "ugc_586_14", "ugc_586_15", "ugc_586_16", "ugc_586_17", "ugc_586_18", "ugc_586_19", "ugc_586_2", "ugc_586_20", "ugc_586_21", "ugc_586_22", "ugc_586_23", "ugc_586_25", "ugc_586_3", "ugc_586_4", "ugc_586_5", "ugc_586_6", "ugc_586_7", "ugc_586_8", "ugc_586_9")
+
+load_bool1 <- FALSE
+
+if(load_bool1){
+  i <- 1
+  # Load the vep annotated vcf files
+  for(i in 1:length(samples)){
+    print(samples[i])
+    gg5_vcf_vep <- glue("{WD}/data/20220214_{samples[i]}-gg5-snps-sweeps-vep_steep.vcf")
+    eval(call("<-", as.name(glue("{samples[i]}_df")), LoadVepVcf(vcf_file = gg5_vcf_vep)))
+  }
+
+  # Combine all the data
+  all_df1 <- rbind(DRS042875_df, DRS042876_df, DRS042877_df, DRS042878_df, DRS042879_df, P4806_126_df, P4806_128_df, P4806_131_df, P4806_132_df, P4806_133_df, P4806_134_df, P4806_135_df, P4806_136_df, P4806_137_df, P4806_139_df, P4806_140_df, P4806_141_df, P4806_142_df, P4806_143_df, P4806_144_df, P4806_157_df, P4806_158_df, P4806_159_df, P4806_160_df, P4806_161_df, P4806_162_df, SRP022583_df, SRS1014597_df, SRS1014598_df, SRS1014599_df, SRS1014600_df, SRS1014601_df, SRS1014602_df, SRS1014603_df, SRS1014604_df, SRS1014605_df, SRS1275748_df, SRS1275749_df, SRS1275750_df, SRS1275751_df, SRS1275752_df, SRS1275753_df, SRS1275754_df, SRS1275755_df, SRS426963_df, SRS524482_df, SRS524483_df, SRS524484_df, SRS524485_df, SRS524486_df, SRS524487_df, SRS524488_df, SRS524489_df, SRS589235_df, SRS589236_df, SRS589237_df, SRS589238_df, SRS589239_df, SRS589240_df, SRS589241_df, SRS589242_df, SRS589243_df, SRS589244_df, SRS589245_df, SRS589246_df, SRS589247_df, SRS589248_df, SRS589249_df, SRS589250_df, SRS589251_df, SRS589252_df, SRS589253_df, SRS589254_df, SRS589255_df, SRS589256_df, SRS589257_df, SRS589258_df, SRS589259_df, SRS589260_df, SRS589261_df, SRS589262_df, SRS589263_df, SRS589265_df, SRS589266_df, SRS810965_df, SRS811020_df, SRS811021_df, SRS811022_df, SRS811023_df, SRS811024_df, SRS811025_df, SRS811026_df, SRS811027_df, ugc_586_1_df, ugc_586_10_df, ugc_586_11_df, ugc_586_12_df, ugc_586_13_df, ugc_586_14_df, ugc_586_15_df, ugc_586_16_df, ugc_586_17_df, ugc_586_18_df, ugc_586_19_df, ugc_586_2_df, ugc_586_20_df, ugc_586_21_df, ugc_586_22_df, ugc_586_23_df, ugc_586_25_df, ugc_586_3_df, ugc_586_4_df, ugc_586_5_df, ugc_586_6_df, ugc_586_7_df, ugc_586_8_df, ugc_586_9_df)
+  
+  # Cleanup
+  rm(DRS042875_df, DRS042876_df, DRS042877_df, DRS042878_df, DRS042879_df, P4806_126_df, P4806_128_df, P4806_131_df, P4806_132_df, P4806_133_df, P4806_134_df, P4806_135_df, P4806_136_df, P4806_137_df, P4806_139_df, P4806_140_df, P4806_141_df, P4806_142_df, P4806_143_df, P4806_144_df, P4806_157_df, P4806_158_df, P4806_159_df, P4806_160_df, P4806_161_df, P4806_162_df, SRP022583_df, SRS1014597_df, SRS1014598_df, SRS1014599_df, SRS1014600_df, SRS1014601_df, SRS1014602_df, SRS1014603_df, SRS1014604_df, SRS1014605_df, SRS1275748_df, SRS1275749_df, SRS1275750_df, SRS1275751_df, SRS1275752_df, SRS1275753_df, SRS1275754_df, SRS1275755_df, SRS426963_df, SRS524482_df, SRS524483_df, SRS524484_df, SRS524485_df, SRS524486_df, SRS524487_df, SRS524488_df, SRS524489_df, SRS589235_df, SRS589236_df, SRS589237_df, SRS589238_df, SRS589239_df, SRS589240_df, SRS589241_df, SRS589242_df, SRS589243_df, SRS589244_df, SRS589245_df, SRS589246_df, SRS589247_df, SRS589248_df, SRS589249_df, SRS589250_df, SRS589251_df, SRS589252_df, SRS589253_df, SRS589254_df, SRS589255_df, SRS589256_df, SRS589257_df, SRS589258_df, SRS589259_df, SRS589260_df, SRS589261_df, SRS589262_df, SRS589263_df, SRS589265_df, SRS589266_df, SRS810965_df, SRS811020_df, SRS811021_df, SRS811022_df, SRS811023_df, SRS811024_df, SRS811025_df, SRS811026_df, SRS811027_df, ugc_586_1_df, ugc_586_10_df, ugc_586_11_df, ugc_586_12_df, ugc_586_13_df, ugc_586_14_df, ugc_586_15_df, ugc_586_16_df, ugc_586_17_df, ugc_586_18_df, ugc_586_19_df, ugc_586_2_df, ugc_586_20_df, ugc_586_21_df, ugc_586_22_df, ugc_586_23_df, ugc_586_25_df, ugc_586_3_df, ugc_586_4_df, ugc_586_5_df, ugc_586_6_df, ugc_586_7_df, ugc_586_8_df, ugc_586_9_df)
+}
+
+
+```
+
+# Add the sample cohort annotation
+Note: Supp annotation file likely has silent error of columns being accidently shuffled
+```{r}
+# Load the supplementary data file
+supp_file <- glue("{WD}/data/20220214_supp-table_steep.txt")
+supp_df <- read.table(file = supp_file, sep = '\t', header = TRUE, fill = TRUE)
+# Subset file
+supp_df <- supp_df %>%
+  select(sample_id_2, cohort, dom, abbreviation, pooled, description)
+
+# Filename
+all_file1 <- glue("{WD}/data/20220214_all-gg5-snps-sweeps-vep-v1.0_steep.vcf")
+save_bool1 <- FALSE
+if(save_bool1){
+  # Load the all_df1 file
+  # Join the supp data to genetic data
+  all_df1 <- left_join(x = all_df1, y = supp_df, by = c("sample" = "sample_id_2"))
+  # Save the file
+  saveRDS(all_df1, all_file1)
+}else{
+  # The file has already been adjusted and saved; therefore, just load it
+  all_df1 <- readRDS(all_file1)
+}
+
+```
+
+# Before Filtering SNPs, Examine the distribution of certain quality statistics for each run
+
+# Determine median depth in sweep region per sample
+blue line represents a median depth of 3
+```{r}
+names(all_df1)
+
+# Examine the median depth in a bar plot stratified by pooled and median depth per sample
+# One and zero are bollean for pooled or not
+all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  mutate(plot_name = ifelse(DP_med >=3, sample, '')) %>%
+  ggplot(aes(x = cohort, y = DP_med)) +
+  geom_abline(intercept=3, slope = 0, color = 'blue') +
+  geom_boxplot() +
+  geom_jitter(alpha = 0.5, height = 0, width = 0.1) +
+  facet_wrap(~pooled)
+
+all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  mutate(plot_name = ifelse(DP_med >=3, sample, '')) %>%
+  ggplot(aes(color = cohort, x = DP_med)) +
+  geom_density() +
+  facet_wrap(~pooled)
+
+# Determine samples to remove
+sam_rm <- all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  filter(DP_med < 3) %>%
+  select(sample) %>% unlist() %>% as.character()
+sam_rm
+
+```
+
+# Remove samples
+```{r}
+rm_sam_bool1 <- FALSE
+if(rm_sam_bool1){
+  all_df2 <- all_df1 %>%
+    filter(!sample %in% sam_rm)
+}else{
+  all_df2 <- all_df1
+}
+```
+
+## DP
+Startified by cohort and whether samples were pooled
+```{r}
+# Examine cohort depths
+all_df2 %>%
+  ggplot(aes(x=DP, color = cohort)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Hawaii depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'haw') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,20) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Bermuda depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'ber') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Domestic depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'dom') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled) +
+  theme(legend.position="none")
+```
+
+# Distribution of RJF depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'rjf') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+## GQ
+Startified by cohort and whether samples were pooled
+Note: Genotype qualities for hawaii are considerably lower
+```{r}
+# Examine cohort depths
+all_df2 %>%
+  ggplot(aes(x=GQ, color = cohort)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Hawaii genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'haw') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,20) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Bermuda genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'ber') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Distribution of Domestic genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'dom') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled) +
+  theme(legend.position="none")
+```
+
+# Distribution of RJF genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'rjf') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Annotate SNPs with the following (AA, AB, BB, BC)
+```{r}
+all_df3 <- all_df2 %>%
+  group_by(CHROM, POS, REF, ALT) %>%
+  mutate(AA = ifelse(GT == './.', NA, 0)) %>%
+  mutate(AB = ifelse(GT == './.', NA, 0)) %>%
+  mutate(BB = ifelse(GT == './.', NA, 0)) %>%
+  mutate(BC = ifelse(GT == './.', NA, 0)) %>%
+  mutate(AA = ifelse(GT == '0/0', 1, AA)) %>%
+  mutate(AB = ifelse(GT %in% c('0/1','0/2','0/3'), 1, AB)) %>%
+  mutate(BB = ifelse(GT %in% c('1/1','2/2','3/3'), 1, BB)) %>%
+  mutate(BC = ifelse(GT %in% c('1/2'), 1, BC)) %>%
+  ungroup()
+```
+
+# Filter legit calls; limited by data from Hawaii
+```{r}
+# all_df4 <- all_df3 %>%
+#   filter(GT != './.') %>%
+#   filter(DP >= 3)
+```
+
+# Convert tidy dataframe to numeric matrix
+AA=0, AB=1, BB=2, BC=3
+```{r}
+all_df5 <- all_df3 %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, CHROM, POS, SNP_VAL,cohort) %>%
+  unique()
+
+# Bermuda; chr 1
+ber1.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 2
+ber2.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 3
+ber3.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 5
+ber5.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 7
+ber7.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# domestic; chr 1
+dom1.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 2
+dom2.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 3
+dom3.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 5
+dom5.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 7
+dom7.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Red Jungelfowl; chr 1
+rjf1.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 2
+rjf2.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 3
+rjf3.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 5
+rjf5.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 7
+rjf7.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Hawaii; chr 1
+haw1.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 2
+haw2.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 3
+haw3.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 5
+haw5.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 7
+haw7.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+```
+
+# Print Dimensions (round 1)
+```{r}
+print("Order: ber, dom, rjf, haw")
+print('Chromosome 1')
+dim(ber1.1)
+dim(dom1.1)
+dim(rjf1.1)
+dim(haw1.1)
+print('Chromosome 2')
+dim(ber2.1)
+dim(dom2.1)
+dim(rjf2.1)
+dim(haw2.1)
+print('Chromosome 3')
+dim(ber3.1)
+dim(dom3.1)
+dim(rjf3.1)
+dim(haw3.1)
+print('Chromosome 5')
+dim(ber5.1)
+dim(dom5.1)
+dim(rjf5.1)
+dim(haw5.1)
+print('Chromosome 7')
+dim(ber7.1)
+dim(dom7.1)
+dim(rjf7.1)
+dim(haw7.1)
+
+```
+
+# Save the data in an .RData File
+```{r}
+if(save_bool){
+  save(ber1.1, dom1.1, rjf1.1, haw1.1,
+     ber2.1, dom2.1, rjf2.1, haw2.1,
+     ber3.1, dom3.1, rjf3.1, haw3.1,
+     ber5.1, dom5.1, rjf5.1, haw5.1,
+     ber7.1, dom7.1, rjf7.1, haw7.1,
+     file = glue("{WD}/data/20220214_cohort-matrices.RData"))
+}
+```
+
+### Rule out negative values
+```{r}
+# Chrome 1
+min(ber1.1,na.rm=T)
+min(dom1.1,na.rm=T)
+min(rjf1.1,na.rm=T)
+min(haw1.1,na.rm=T)
+# Chrome 2
+min(ber2.1,na.rm=T)
+min(dom2.1,na.rm=T)
+min(rjf2.1,na.rm=T)
+min(haw2.1,na.rm=T)
+# Chrome 3
+min(ber3.1,na.rm=T)
+min(dom3.1,na.rm=T)
+min(rjf3.1,na.rm=T)
+min(haw3.1,na.rm=T)
+# Chrome 5
+min(ber5.1,na.rm=T)
+min(dom5.1,na.rm=T)
+min(rjf5.1,na.rm=T)
+min(haw5.1,na.rm=T)
+# Chrome 7
+min(ber7.1,na.rm=T)
+min(dom7.1,na.rm=T)
+min(rjf7.1,na.rm=T)
+min(haw7.1,na.rm=T)
+
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 1)
+```{r}
+# ber
+ber1.1.f.c0<-apply(ber1.1,2,function(x) sum(is.na(x))) 
+plot(ber1.1.f.c0, ylim = c(0,dim(ber1.1)[1]), main = 'ber; chr1'); abline(h = 5, col = 'blue')
+
+# dom
+dom1.1.f.c0<-apply(dom1.1,2,function(x) sum(is.na(x))) 
+plot(dom1.1.f.c0, ylim = c(0,dim(dom1.1)[1]), main = 'dom; chr1'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf1.1.f.c0<-apply(rjf1.1,2,function(x) sum(is.na(x))) 
+plot(rjf1.1.f.c0, ylim = c(0,dim(rjf1.1)[1]), main = 'rjf; chr1'); abline(h = 3, col = 'blue')
+
+# haw
+haw1.1.f.c0<-apply(haw1.1,2,function(x) sum(is.na(x))) 
+plot(haw1.1.f.c0, ylim = c(0,dim(haw1.1)[1]), main = 'haw; chr1'); abline(h = 5, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 1)
+```{r}
+# ber; chr1
+rm_n <- sum(ber1.1.f.c0>=5)
+ber1.1 <- ber1.1[,ber1.1.f.c0<5]
+print(glue("Features removed from ber;chr1: {rm_n}"))
+dim(ber1.1)
+
+# dom; chr1
+rm_n <- sum(dom1.1.f.c0>=10)
+dom1.1 <- dom1.1[,dom1.1.f.c0<10]
+print(glue("Features removed from dom;chr1: {rm_n}"))
+dim(dom1.1)
+
+# rjf; chr1
+rm_n <- sum(rjf1.1.f.c0>=3)
+rjf1.1 <- rjf1.1[,rjf1.1.f.c0<3]
+print(glue("Features removed from rjf;chr1: {rm_n}"))
+dim(rjf1.1)
+
+# haw; chr1
+rm_n <- sum(haw1.1.f.c0>=5)
+haw1.1 <- haw1.1[,haw1.1.f.c0<5]
+print(glue("Features removed from haw;chr1: {rm_n}"))
+dim(haw1.1)
+```
+
+
+### Examine the Distribution of Missing values in Features (Chrome 2)
+```{r}
+# ber
+ber2.1.f.c0<-apply(ber2.1,2,function(x) sum(is.na(x))) 
+plot(ber2.1.f.c0, ylim = c(0,dim(ber2.1)[1]), main = 'ber; chr2'); abline(h = 5, col = 'blue')
+
+# dom
+dom2.1.f.c0<-apply(dom2.1,2,function(x) sum(is.na(x))) 
+plot(dom2.1.f.c0, ylim = c(0,dim(dom2.1)[1]), main = 'dom; chr2'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf2.1.f.c0<-apply(rjf2.1,2,function(x) sum(is.na(x))) 
+plot(rjf2.1.f.c0, ylim = c(0,dim(rjf2.1)[1]), main = 'rjf; chr2'); abline(h = 3, col = 'blue')
+
+# haw
+haw2.1.f.c0<-apply(haw2.1,2,function(x) sum(is.na(x))) 
+plot(haw2.1.f.c0, ylim = c(0,dim(haw2.1)[1]), main = 'haw; chr2'); abline(h = 5, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 2)
+```{r}
+# ber; chr2
+rm_n <- sum(ber2.1.f.c0>=5)
+ber2.1 <- ber2.1[,ber2.1.f.c0<5]
+print(glue("Features removed from ber;chr2: {rm_n}"))
+dim(ber2.1)
+
+# dom; chr2
+rm_n <- sum(dom2.1.f.c0>=10)
+dom2.1 <- dom2.1[,dom2.1.f.c0<10]
+print(glue("Features removed from dom;chr2: {rm_n}"))
+dim(dom2.1)
+
+# rjf; chr2
+rm_n <- sum(rjf2.1.f.c0>=3)
+rjf2.1 <- rjf2.1[,rjf2.1.f.c0<3]
+print(glue("Features removed from rjf;chr2: {rm_n}"))
+dim(rjf2.1)
+
+# haw; chr2
+rm_n <- sum(haw2.1.f.c0>=5)
+haw2.1 <- haw2.1[,haw2.1.f.c0<5]
+print(glue("Features removed from haw;chr2: {rm_n}"))
+dim(haw2.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 3)
+```{r}
+# ber
+ber3.1.f.c0<-apply(ber3.1,2,function(x) sum(is.na(x))) 
+plot(ber3.1.f.c0, ylim = c(0,dim(ber3.1)[1]), main = 'ber; chr3'); abline(h = 5, col = 'blue')
+
+# dom
+dom3.1.f.c0<-apply(dom3.1,2,function(x) sum(is.na(x))) 
+plot(dom3.1.f.c0, ylim = c(0,dim(dom3.1)[1]), main = 'dom; chr3'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf3.1.f.c0<-apply(rjf3.1,2,function(x) sum(is.na(x))) 
+plot(rjf3.1.f.c0, ylim = c(0,dim(rjf3.1)[1]), main = 'rjf; chr3'); abline(h = 3, col = 'blue')
+
+# haw
+haw3.1.f.c0<-apply(haw3.1,2,function(x) sum(is.na(x))) 
+plot(haw3.1.f.c0, ylim = c(0,dim(haw3.1)[1]), main = 'haw; chr3'); abline(h = 5, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 3)
+```{r}
+# ber; chr3
+rm_n <- sum(ber3.1.f.c0>=5)
+ber3.1 <- ber3.1[,ber3.1.f.c0<5]
+print(glue("Features removed from ber;chr3: {rm_n}"))
+dim(ber3.1)
+
+# dom; chr3
+rm_n <- sum(dom3.1.f.c0>=10)
+dom3.1 <- dom3.1[,dom3.1.f.c0<10]
+print(glue("Features removed from dom;chr3: {rm_n}"))
+dim(dom3.1)
+
+# rjf; chr3
+rm_n <- sum(rjf3.1.f.c0>=3)
+rjf3.1 <- rjf3.1[,rjf3.1.f.c0<3]
+print(glue("Features removed from rjf;chr3: {rm_n}"))
+dim(rjf3.1)
+
+# haw; chr3
+rm_n <- sum(haw3.1.f.c0>=5)
+haw3.1 <- haw3.1[,haw3.1.f.c0<5]
+print(glue("Features removed from haw;chr3: {rm_n}"))
+dim(haw3.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 5)
+```{r}
+# ber
+ber5.1.f.c0<-apply(ber5.1,2,function(x) sum(is.na(x))) 
+plot(ber5.1.f.c0, ylim = c(0,dim(ber5.1)[1]), main = 'ber; chr5'); abline(h = 5, col = 'blue')
+
+# dom
+dom5.1.f.c0<-apply(dom5.1,2,function(x) sum(is.na(x))) 
+plot(dom5.1.f.c0, ylim = c(0,dim(dom5.1)[1]), main = 'dom; chr5'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf5.1.f.c0<-apply(rjf5.1,2,function(x) sum(is.na(x))) 
+plot(rjf5.1.f.c0, ylim = c(0,dim(rjf5.1)[1]), main = 'rjf; chr5'); abline(h = 3, col = 'blue')
+
+# haw
+haw5.1.f.c0<-apply(haw5.1,2,function(x) sum(is.na(x))) 
+plot(haw5.1.f.c0, ylim = c(0,dim(haw5.1)[1]), main = 'haw; chr5'); abline(h = 5, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 5)
+```{r}
+# ber; chr5
+rm_n <- sum(ber5.1.f.c0>=5)
+ber5.1 <- ber5.1[,ber5.1.f.c0<5]
+print(glue("Features removed from ber;chr5: {rm_n}"))
+dim(ber5.1)
+
+# dom; chr5
+rm_n <- sum(dom5.1.f.c0>=10)
+dom5.1 <- dom5.1[,dom5.1.f.c0<10]
+print(glue("Features removed from dom;chr5: {rm_n}"))
+dim(dom5.1)
+
+# rjf; chr5
+rm_n <- sum(rjf5.1.f.c0>=3)
+rjf5.1 <- rjf5.1[,rjf5.1.f.c0<3]
+print(glue("Features removed from rjf;chr5: {rm_n}"))
+dim(rjf5.1)
+
+# haw; chr5
+rm_n <- sum(haw5.1.f.c0>=5)
+haw5.1 <- haw5.1[,haw5.1.f.c0<5]
+print(glue("Features removed from haw;chr5: {rm_n}"))
+dim(haw5.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 7)
+```{r}
+# ber
+ber7.1.f.c0<-apply(ber7.1,2,function(x) sum(is.na(x))) 
+plot(ber7.1.f.c0, ylim = c(0,dim(ber7.1)[1]), main = 'ber; chr7'); abline(h = 5, col = 'blue')
+
+# dom
+dom7.1.f.c0<-apply(dom7.1,2,function(x) sum(is.na(x))) 
+plot(dom7.1.f.c0, ylim = c(0,dim(dom7.1)[1]), main = 'dom; chr7'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf7.1.f.c0<-apply(rjf7.1,2,function(x) sum(is.na(x))) 
+plot(rjf7.1.f.c0, ylim = c(0,dim(rjf7.1)[1]), main = 'rjf; chr7'); abline(h = 3, col = 'blue')
+
+# haw
+haw7.1.f.c0<-apply(haw7.1,2,function(x) sum(is.na(x))) 
+plot(haw7.1.f.c0, ylim = c(0,dim(haw7.1)[1]), main = 'haw; chr7'); abline(h = 5, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 7)
+```{r}
+# ber; chr7
+rm_n <- sum(ber7.1.f.c0>=5)
+ber7.1 <- ber7.1[,ber7.1.f.c0<5]
+print(glue("Features removed from ber;chr7: {rm_n}"))
+dim(ber7.1)
+
+# dom; chr7
+rm_n <- sum(dom7.1.f.c0>=10)
+dom7.1 <- dom7.1[,dom7.1.f.c0<10]
+print(glue("Features removed from dom;chr7: {rm_n}"))
+dim(dom7.1)
+
+# rjf; chr7
+rm_n <- sum(rjf7.1.f.c0>=3)
+rjf7.1 <- rjf7.1[,rjf7.1.f.c0<3]
+print(glue("Features removed from rjf;chr7: {rm_n}"))
+dim(rjf7.1)
+
+# haw; chr7
+rm_n <- sum(haw7.1.f.c0>=5)
+haw7.1 <- haw7.1[,haw7.1.f.c0<5]
+print(glue("Features removed from haw;chr7: {rm_n}"))
+dim(haw7.1)
+```
+
+# Missing Values by Sample
+Note: We want to make sure that we remove the same samples from each Chromosome, but we will examine the missingness stratified across all chromosomes before making the final decision
+
+### Examine the Distribution of Missing values in Samples (Chrome 1)
+```{r}
+# ber
+ber1.1.s.c0<-apply(ber1.1,1,function(x) sum(is.na(x))) 
+plot(ber1.1.s.c0, ylim = c(0,dim(ber1.1)[2]), main = 'ber; chr1'); abline(h = dim(ber1.1)[2]/5, col = 'blue')
+
+# dom
+dom1.1.s.c0<-apply(dom1.1,1,function(x) sum(is.na(x))) 
+plot(dom1.1.s.c0, ylim = c(0,dim(dom1.1)[2]), main = 'dom; chr1'); abline(h = dim(dom1.1)[2]/5, col = 'blue')
+
+# rjf
+rjf1.1.s.c0<-apply(rjf1.1,1,function(x) sum(is.na(x))) 
+plot(rjf1.1.s.c0, ylim = c(0,dim(rjf1.1)[2]), main = 'rjf; chr1'); abline(h = dim(rjf1.1)[2]/5, col = 'blue')
+
+# haw
+haw1.1.s.c0<-apply(haw1.1,1,function(x) sum(is.na(x))) 
+plot(haw1.1.s.c0, ylim = c(0,dim(haw1.1)[2]), main = 'haw; chr1'); abline(h = dim(haw1.1)[2]/5, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 1)
+```{r}
+# ber; chr1
+rm_n <- sum(ber1.1.s.c0>=dim(ber1.1)[2]/5)
+rm_names <- names(ber1.1.s.c0)[!ber1.1.s.c0<dim(ber1.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber1.1 <- ber1.1[ber1.1.s.c0<dim(ber1.1)[2]/5, ]
+print(glue("Samples removed from ber_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber1.1)
+
+# dom; chr1
+rm_n <- sum(dom1.1.s.c0>=dim(dom1.1)[2]/5)
+rm_names <- names(dom1.1.s.c0)[!dom1.1.s.c0<dim(dom1.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom1.1 <- dom1.1[dom1.1.s.c0<dim(dom1.1)[2]/5, ]
+print(glue("Samples removed from dom_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom1.1)
+
+# rjf; chr1
+rm_n <- sum(rjf1.1.s.c0>=dim(rjf1.1)[2]/5)
+rm_names <- names(rjf1.1.s.c0)[!rjf1.1.s.c0<dim(rjf1.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf1.1 <- rjf1.1[rjf1.1.s.c0<dim(rjf1.1)[2]/5, ]
+print(glue("Samples removed from rjf_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf1.1)
+
+# haw; chr1
+rm_n <- sum(haw1.1.s.c0>=dim(haw1.1)[2]/5)
+rm_names <- names(haw1.1.s.c0)[!haw1.1.s.c0<dim(haw1.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+haw1.1 <- haw1.1[haw1.1.s.c0<dim(haw1.1)[2]/5, ]
+print(glue("Samples removed from haw_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(haw1.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 2)
+```{r}
+# ber
+ber2.1.s.c0<-apply(ber2.1,1,function(x) sum(is.na(x))) 
+plot(ber2.1.s.c0, ylim = c(0,dim(ber2.1)[2]), main = 'ber; chr2'); abline(h = dim(ber2.1)[2]/5, col = 'blue')
+
+# dom
+dom2.1.s.c0<-apply(dom2.1,1,function(x) sum(is.na(x))) 
+plot(dom2.1.s.c0, ylim = c(0,dim(dom2.1)[2]), main = 'dom; chr2'); abline(h = dim(dom2.1)[2]/4, col = 'blue')
+
+# rjf
+rjf2.1.s.c0<-apply(rjf2.1,1,function(x) sum(is.na(x))) 
+plot(rjf2.1.s.c0, ylim = c(0,dim(rjf2.1)[2]), main = 'rjf; chr2'); abline(h = dim(rjf2.1)[2]/5, col = 'blue')
+
+# haw
+haw2.1.s.c0<-apply(haw2.1,1,function(x) sum(is.na(x))) 
+plot(haw2.1.s.c0, ylim = c(0,dim(haw2.1)[2]), main = 'haw; chr2'); abline(h = dim(haw2.1)[2]/5, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 2)
+```{r}
+# ber; chr2
+rm_n <- sum(ber2.1.s.c0>=dim(ber2.1)[2]/5)
+rm_names <- names(ber2.1.s.c0)[!ber2.1.s.c0<dim(ber2.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber2.1 <- ber2.1[ber2.1.s.c0<dim(ber2.1)[2]/5, ]
+print(glue("Samples removed from ber_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber2.1)
+
+# dom; chr2
+rm_n <- sum(dom2.1.s.c0>=dim(dom2.1)[2]/5)
+rm_names <- names(dom2.1.s.c0)[!dom2.1.s.c0<dim(dom2.1)[2]/4]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom2.1 <- dom2.1[dom2.1.s.c0<dim(dom2.1)[2]/4, ]
+print(glue("Samples removed from dom_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom2.1)
+
+# rjf; chr2
+rm_n <- sum(rjf2.1.s.c0>=dim(rjf2.1)[2]/5)
+rm_names <- names(rjf2.1.s.c0)[!rjf2.1.s.c0<dim(rjf2.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf2.1 <- rjf2.1[rjf2.1.s.c0<dim(rjf2.1)[2]/5, ]
+print(glue("Samples removed from rjf_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf2.1)
+
+# haw; chr2
+rm_n <- sum(haw2.1.s.c0>=dim(haw2.1)[2]/5)
+rm_names <- names(haw2.1.s.c0)[!haw2.1.s.c0<dim(haw2.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+haw2.1 <- haw2.1[haw2.1.s.c0<dim(haw2.1)[2]/5, ]
+print(glue("Samples removed from haw_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(haw2.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 3)
+```{r}
+# ber
+ber3.1.s.c0<-apply(ber3.1,1,function(x) sum(is.na(x))) 
+plot(ber3.1.s.c0, ylim = c(0,dim(ber3.1)[2]), main = 'ber; chr3'); abline(h = dim(ber3.1)[2]/5, col = 'blue')
+
+# dom
+dom3.1.s.c0<-apply(dom3.1,1,function(x) sum(is.na(x))) 
+plot(dom3.1.s.c0, ylim = c(0,dim(dom3.1)[2]), main = 'dom; chr3'); abline(h = dim(dom3.1)[2]/3, col = 'blue')
+
+# rjf
+rjf3.1.s.c0<-apply(rjf3.1,1,function(x) sum(is.na(x))) 
+plot(rjf3.1.s.c0, ylim = c(0,dim(rjf3.1)[2]), main = 'rjf; chr3'); abline(h = dim(rjf3.1)[2]/5, col = 'blue')
+
+# haw
+haw3.1.s.c0<-apply(haw3.1,1,function(x) sum(is.na(x))) 
+plot(haw3.1.s.c0, ylim = c(0,dim(haw3.1)[2]), main = 'haw; chr3'); abline(h = dim(haw3.1)[2]/5, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 3)
+```{r}
+# ber; chr3
+rm_n <- sum(ber3.1.s.c0>=dim(ber3.1)[2]/5)
+rm_names <- names(ber3.1.s.c0)[!ber3.1.s.c0<dim(ber3.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber3.1 <- ber3.1[ber3.1.s.c0<dim(ber3.1)[2]/5, ]
+print(glue("Samples removed from ber_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber3.1)
+
+# dom; chr3
+rm_n <- sum(dom3.1.s.c0>=dim(dom3.1)[2]/5)
+rm_names <- names(dom3.1.s.c0)[!dom3.1.s.c0<dim(dom3.1)[2]/3]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom3.1 <- dom3.1[dom3.1.s.c0<dim(dom3.1)[2]/3, ]
+print(glue("Samples removed from dom_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom3.1)
+
+# rjf; chr3
+rm_n <- sum(rjf3.1.s.c0>=dim(rjf3.1)[2]/5)
+rm_names <- names(rjf3.1.s.c0)[!rjf3.1.s.c0<dim(rjf3.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf3.1 <- rjf3.1[rjf3.1.s.c0<dim(rjf3.1)[2]/5, ]
+print(glue("Samples removed from rjf_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf3.1)
+
+# haw; chr3
+rm_n <- sum(haw3.1.s.c0>=dim(haw3.1)[2]/5)
+rm_names <- names(haw3.1.s.c0)[!haw3.1.s.c0<dim(haw3.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+haw3.1 <- haw3.1[haw3.1.s.c0<dim(haw3.1)[2]/5, ]
+print(glue("Samples removed from haw_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(haw3.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 5)
+```{r}
+# ber
+ber5.1.s.c0<-apply(ber5.1,1,function(x) sum(is.na(x))) 
+plot(ber5.1.s.c0, ylim = c(0,dim(ber5.1)[2]), main = 'ber; chr5'); abline(h = dim(ber5.1)[2]/5, col = 'blue')
+
+# dom
+dom5.1.s.c0<-apply(dom5.1,1,function(x) sum(is.na(x))) 
+plot(dom5.1.s.c0, ylim = c(0,dim(dom5.1)[2]), main = 'dom; chr5'); abline(h = dim(dom5.1)[2]/5, col = 'blue')
+
+# rjf
+rjf5.1.s.c0<-apply(rjf5.1,1,function(x) sum(is.na(x))) 
+plot(rjf5.1.s.c0, ylim = c(0,dim(rjf5.1)[2]), main = 'rjf; chr5'); abline(h = dim(rjf5.1)[2]/5, col = 'blue')
+
+# haw
+haw5.1.s.c0<-apply(haw5.1,1,function(x) sum(is.na(x))) 
+plot(haw5.1.s.c0, ylim = c(0,dim(haw5.1)[2]), main = 'haw; chr5'); abline(h = dim(haw5.1)[2]/5, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 5)
+```{r}
+# ber; chr5
+rm_n <- sum(ber5.1.s.c0>=dim(ber5.1)[2]/5)
+rm_names <- names(ber5.1.s.c0)[!ber5.1.s.c0<dim(ber5.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber5.1 <- ber5.1[ber5.1.s.c0<dim(ber5.1)[2]/5, ]
+print(glue("Samples removed from ber_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber5.1)
+
+# dom; chr5
+rm_n <- sum(dom5.1.s.c0>=dim(dom5.1)[2]/5)
+rm_names <- names(dom5.1.s.c0)[!dom5.1.s.c0<dim(dom5.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom5.1 <- dom5.1[dom5.1.s.c0<dim(dom5.1)[2]/5, ]
+print(glue("Samples removed from dom_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom5.1)
+
+# rjf; chr5
+rm_n <- sum(rjf5.1.s.c0>=dim(rjf5.1)[2]/5)
+rm_names <- names(rjf5.1.s.c0)[!rjf5.1.s.c0<dim(rjf5.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf5.1 <- rjf5.1[rjf5.1.s.c0<dim(rjf5.1)[2]/5, ]
+print(glue("Samples removed from rjf_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf5.1)
+
+# haw; chr5
+rm_n <- sum(haw5.1.s.c0>=dim(haw5.1)[2]/5)
+rm_names <- names(haw5.1.s.c0)[!haw5.1.s.c0<dim(haw5.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+haw5.1 <- haw5.1[haw5.1.s.c0<dim(haw5.1)[2]/5, ]
+print(glue("Samples removed from haw_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(haw5.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 7)
+```{r}
+# ber
+ber7.1.s.c0<-apply(ber7.1,1,function(x) sum(is.na(x))) 
+plot(ber7.1.s.c0, ylim = c(0,dim(ber7.1)[2]), main = 'ber; chr7'); abline(h = dim(ber7.1)[2]/5, col = 'blue')
+
+# dom
+dom7.1.s.c0<-apply(dom7.1,1,function(x) sum(is.na(x))) 
+plot(dom7.1.s.c0, ylim = c(0,dim(dom7.1)[2]), main = 'dom; chr7'); abline(h = dim(dom7.1)[2]/3, col = 'blue')
+
+# rjf
+rjf7.1.s.c0<-apply(rjf7.1,1,function(x) sum(is.na(x))) 
+plot(rjf7.1.s.c0, ylim = c(0,dim(rjf7.1)[2]), main = 'rjf; chr7'); abline(h = dim(rjf7.1)[2]/5, col = 'blue')
+
+# haw
+haw7.1.s.c0<-apply(haw7.1,1,function(x) sum(is.na(x))) 
+plot(haw7.1.s.c0, ylim = c(0,dim(haw7.1)[2]), main = 'haw; chr7'); abline(h = dim(haw7.1)[2]/5, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 7)
+```{r}
+# ber; chr7
+rm_n <- sum(ber7.1.s.c0>=dim(ber7.1)[2]/5)
+rm_names <- names(ber7.1.s.c0)[!ber7.1.s.c0<dim(ber7.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber7.1 <- ber7.1[ber7.1.s.c0<dim(ber7.1)[2]/5, ]
+print(glue("Samples removed from ber_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber7.1)
+
+# dom; chr7
+rm_n <- sum(dom7.1.s.c0>=dim(dom7.1)[2]/5)
+rm_names <- names(dom7.1.s.c0)[!dom7.1.s.c0<dim(dom7.1)[2]/3]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom7.1 <- dom7.1[dom7.1.s.c0<dim(dom7.1)[2]/3, ]
+print(glue("Samples removed from dom_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom7.1)
+
+# rjf; chr7
+rm_n <- sum(rjf7.1.s.c0>=dim(rjf7.1)[2]/5)
+rm_names <- names(rjf7.1.s.c0)[!rjf7.1.s.c0<dim(rjf7.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf7.1 <- rjf7.1[rjf7.1.s.c0<dim(rjf7.1)[2]/5, ]
+print(glue("Samples removed from rjf_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf7.1)
+
+# haw; chr7
+rm_n <- sum(haw7.1.s.c0>=dim(haw7.1)[2]/5)
+rm_names <- names(haw7.1.s.c0)[!haw7.1.s.c0<dim(haw7.1)[2]/5]
+if(length(rm_names) == 0){rm_names <- 'none'}
+haw7.1 <- haw7.1[haw7.1.s.c0<dim(haw7.1)[2]/5, ]
+print(glue("Samples removed from haw_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(haw7.1)
+```
+
+# Subset only the shared samples and shared features between matrices
+Note: Finished matrices should have the same dimensions for each chromosome
+Note: All samples are the same between chromosomes
+
+## Shared Features (Chrom 1)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber1.1)[colnames(ber1.1) %in% colnames(dom1.1)]
+shared_p2 <- colnames(rjf1.1)[colnames(rjf1.1) %in% colnames(haw1.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber1.1 <- ber1.1[, shared_p]
+dom1.1 <- dom1.1[, shared_p]
+rjf1.1 <- rjf1.1[, shared_p]
+haw1.1 <- haw1.1[, shared_p]
+```
+
+## Shared Features (Chrom 2)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber2.1)[colnames(ber2.1) %in% colnames(dom2.1)]
+shared_p2 <- colnames(rjf2.1)[colnames(rjf2.1) %in% colnames(haw2.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber2.1 <- ber2.1[, shared_p]
+dom2.1 <- dom2.1[, shared_p]
+rjf2.1 <- rjf2.1[, shared_p]
+haw2.1 <- haw2.1[, shared_p]
+```
+
+## Shared Features (Chrom 3)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber3.1)[colnames(ber3.1) %in% colnames(dom3.1)]
+shared_p2 <- colnames(rjf3.1)[colnames(rjf3.1) %in% colnames(haw3.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber3.1 <- ber3.1[, shared_p]
+dom3.1 <- dom3.1[, shared_p]
+rjf3.1 <- rjf3.1[, shared_p]
+haw3.1 <- haw3.1[, shared_p]
+```
+
+## Shared Features (Chrom 5)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber5.1)[colnames(ber5.1) %in% colnames(dom5.1)]
+shared_p2 <- colnames(rjf5.1)[colnames(rjf5.1) %in% colnames(haw5.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber5.1 <- ber5.1[, shared_p]
+dom5.1 <- dom5.1[, shared_p]
+rjf5.1 <- rjf5.1[, shared_p]
+haw5.1 <- haw5.1[, shared_p]
+```
+
+## Shared Features (Chrom 7)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber7.1)[colnames(ber7.1) %in% colnames(dom7.1)]
+shared_p2 <- colnames(rjf7.1)[colnames(rjf7.1) %in% colnames(haw7.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber7.1 <- ber7.1[, shared_p]
+dom7.1 <- dom7.1[, shared_p]
+rjf7.1 <- rjf7.1[, shared_p]
+haw7.1 <- haw7.1[, shared_p]
+```
+
+# Print Dimensions (round 2)
+```{r}
+print("Order: ber, dom, rjf, haw")
+print('Chromosome 1')
+dim(ber1.1)
+dim(dom1.1)
+dim(rjf1.1)
+dim(haw1.1)
+print('Chromosome 2')
+dim(ber2.1)
+dim(dom2.1)
+dim(rjf2.1)
+dim(haw2.1)
+print('Chromosome 3')
+dim(ber3.1)
+dim(dom3.1)
+dim(rjf3.1)
+dim(haw3.1)
+print('Chromosome 5')
+dim(ber5.1)
+dim(dom5.1)
+dim(rjf5.1)
+dim(haw5.1)
+print('Chromosome 7')
+dim(ber7.1)
+dim(dom7.1)
+dim(rjf7.1)
+dim(haw7.1)
+
+```
+
+# Confirm the New Distribution of Missing Features
+
+## Missing Features (Chrom 1)
+```{r}
+# ber
+ber1.1.f.c0<-apply(ber1.1,2,function(x) sum(is.na(x))) 
+plot(ber1.1.f.c0, ylim = c(0,dim(ber1.1)[2]))
+
+# dom
+dom1.1.f.c0<-apply(dom1.1,2,function(x) sum(is.na(x))) 
+plot(dom1.1.f.c0, ylim = c(0,dim(dom1.1)[2]))
+
+# rjf
+rjf1.1.f.c0<-apply(rjf1.1,2,function(x) sum(is.na(x))) 
+plot(rjf1.1.f.c0, ylim = c(0,dim(rjf1.1)[2]))
+
+# haw
+haw1.1.f.c0<-apply(haw1.1,2,function(x) sum(is.na(x))) 
+plot(haw1.1.f.c0, ylim = c(0,dim(haw1.1)[2]))
+```
+
+## Missing Features (Chrom 2)
+```{r}
+# ber
+ber2.1.f.c0<-apply(ber2.1,2,function(x) sum(is.na(x))) 
+plot(ber2.1.f.c0, ylim = c(0,dim(ber2.1)[2]))
+
+# dom
+dom2.1.f.c0<-apply(dom2.1,2,function(x) sum(is.na(x))) 
+plot(dom2.1.f.c0, ylim = c(0,dim(dom2.1)[2]))
+
+# rjf
+rjf2.1.f.c0<-apply(rjf2.1,2,function(x) sum(is.na(x))) 
+plot(rjf2.1.f.c0, ylim = c(0,dim(rjf2.1)[2]))
+
+# haw
+haw2.1.f.c0<-apply(haw2.1,2,function(x) sum(is.na(x))) 
+plot(haw2.1.f.c0, ylim = c(0,dim(haw2.1)[2]))
+```
+
+## Missing Features (Chrom 3)
+```{r}
+# ber
+ber3.1.f.c0<-apply(ber3.1,2,function(x) sum(is.na(x))) 
+plot(ber3.1.f.c0, ylim = c(0,dim(ber3.1)[2]))
+
+# dom
+dom3.1.f.c0<-apply(dom3.1,2,function(x) sum(is.na(x))) 
+plot(dom3.1.f.c0, ylim = c(0,dim(dom3.1)[2]))
+
+# rjf
+rjf3.1.f.c0<-apply(rjf3.1,2,function(x) sum(is.na(x))) 
+plot(rjf3.1.f.c0, ylim = c(0,dim(rjf3.1)[2]))
+
+# haw
+haw3.1.f.c0<-apply(haw3.1,2,function(x) sum(is.na(x))) 
+plot(haw3.1.f.c0, ylim = c(0,dim(haw3.1)[2]))
+```
+
+## Missing Features (Chrom 5)
+```{r}
+# ber
+ber5.1.f.c0<-apply(ber5.1,2,function(x) sum(is.na(x))) 
+plot(ber5.1.f.c0, ylim = c(0,dim(ber5.1)[2]))
+
+# dom
+dom5.1.f.c0<-apply(dom5.1,2,function(x) sum(is.na(x))) 
+plot(dom5.1.f.c0, ylim = c(0,dim(dom5.1)[2]))
+
+# rjf
+rjf5.1.f.c0<-apply(rjf5.1,2,function(x) sum(is.na(x))) 
+plot(rjf5.1.f.c0, ylim = c(0,dim(rjf5.1)[2]))
+
+# haw
+haw5.1.f.c0<-apply(haw5.1,2,function(x) sum(is.na(x))) 
+plot(haw5.1.f.c0, ylim = c(0,dim(haw5.1)[2]))
+```
+
+## Missing Features (Chrom 7)
+```{r}
+# ber
+ber7.1.f.c0<-apply(ber7.1,2,function(x) sum(is.na(x))) 
+plot(ber7.1.f.c0, ylim = c(0,dim(ber7.1)[2]))
+
+# dom
+dom7.1.f.c0<-apply(dom7.1,2,function(x) sum(is.na(x))) 
+plot(dom7.1.f.c0, ylim = c(0,dim(dom7.1)[2]))
+
+# rjf
+rjf7.1.f.c0<-apply(rjf7.1,2,function(x) sum(is.na(x))) 
+plot(rjf7.1.f.c0, ylim = c(0,dim(rjf7.1)[2]))
+
+# haw
+haw7.1.f.c0<-apply(haw7.1,2,function(x) sum(is.na(x))) 
+plot(haw7.1.f.c0, ylim = c(0,dim(haw7.1)[2]))
+```
+
+# Imputation: A seperate object will be created with imputed data ... imputated variants will not be considered trustworthy
+
+### Impute Missing values (Chrome 1)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber1.1.2<-impute.knn(ber1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber1.1[,ber1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber1.1.2[, ber1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber1.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom1.1.2<-impute.knn(dom1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom1.1[,dom1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom1.1.2[, dom1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom1.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf1.1.2<-impute.knn(rjf1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf1.1[,rjf1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf1.1.2[, rjf1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf1.1.2))}")
+
+#haw
+glue("haw: features with missing values (rows) before and after imputation")
+haw1.1.2<-impute.knn(haw1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(haw1.1[,haw1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(haw1.1.2[, haw1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(haw1.1.2))}")
+```
+
+### Impute Missing values (Chrome 2)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber2.1.2<-impute.knn(ber2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber2.1[,ber2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber2.1.2[, ber2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber2.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom2.1.2<-impute.knn(dom2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom2.1[,dom2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom2.1.2[, dom2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom2.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf2.1.2<-impute.knn(rjf2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf2.1[,rjf2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf2.1.2[, rjf2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf2.1.2))}")
+
+#haw
+glue("haw: features with missing values (rows) before and after imputation")
+haw2.1.2<-impute.knn(haw2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(haw2.1[,haw2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(haw2.1.2[, haw2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(haw2.1.2))}")
+```
+
+### Impute Missing values (Chrome 3)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber3.1.2<-impute.knn(ber3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber3.1[,ber3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber3.1.2[, ber3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber3.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom3.1.2<-impute.knn(dom3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom3.1[,dom3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom3.1.2[, dom3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom3.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf3.1.2<-impute.knn(rjf3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf3.1[,rjf3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf3.1.2[, rjf3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf3.1.2))}")
+
+#haw
+glue("haw: features with missing values (rows) before and after imputation")
+haw3.1.2<-impute.knn(haw3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(haw3.1[,haw3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(haw3.1.2[, haw3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(haw3.1.2))}")
+```
+
+### Impute Missing values (Chrome 5)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber5.1.2<-impute.knn(ber5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+try(
+  image(as.matrix(ber5.1[,ber5.1.f.c0>0]),col=redblue100,axes=F),
+  silent=FALSE)
+try(image(as.matrix(ber5.1.2[, ber5.1.f.c0>0]),col=redblue100,axes=F),
+  silent=FALSE)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber5.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom5.1.2<-impute.knn(dom5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom5.1[,dom5.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom5.1.2[, dom5.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom5.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf5.1.2<-impute.knn(rjf5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf5.1[,rjf5.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf5.1.2[, rjf5.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf5.1.2))}")
+
+#haw
+glue("haw: features with missing values (rows) before and after imputation")
+haw5.1.2<-impute.knn(haw5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(haw5.1[,haw5.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(haw5.1.2[, haw5.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(haw5.1.2))}")
+```
+
+### Impute Missing values (Chrome 7)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber7.1.2<-impute.knn(ber7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+try(image(as.matrix(ber7.1[,ber7.1.f.c0>0]),col=redblue100,axes=F))
+try(image(as.matrix(ber7.1.2[, ber7.1.f.c0>0]),col=redblue100,axes=F))
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber7.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom7.1.2<-impute.knn(dom7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom7.1[,dom7.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom7.1.2[, dom7.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom7.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf7.1.2<-impute.knn(rjf7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf7.1[,rjf7.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf7.1.2[, rjf7.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf7.1.2))}")
+
+#haw
+glue("haw: features with missing values (rows) before and after imputation")
+haw7.1.2<-impute.knn(haw7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(haw7.1[,haw7.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(haw7.1.2[, haw7.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(haw7.1.2))}")
+```
+
+# Create Sample Annotation Matrices
+
+## Create Sample Annotation Matrix (Chrom 1)
+```{r}
+all_df1$DP1_med <- all_df1$DP2_med <- all_df1$DP3_med <- all_df1$DP5_med <- all_df1$DP7_med <- NA
+all_df1$GQ1_med <- all_df1$GQ2_med <- all_df1$GQ3_med <- all_df1$GQ5_med <- all_df1$GQ7_med <- NA
+sam_ann_mat1.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber1.1), rownames(dom1.1), rownames(rjf1.1), rownames(haw1.1)) )%>%
+  filter(CHROM == 'chr1') %>%
+  filter(POS %in% colnames(ber1.1)) %>%
+  group_by(sample) %>%
+  mutate(DP1.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ1.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP1.1_med, GQ1.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat1.1
+plot(sam_ann_mat1.1[,4],sam_ann_mat1.1[,5])
+```
+
+## Create Sample Annotation Matrix (Chrom 2)
+```{r}
+sam_ann_mat2.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber2.1), rownames(dom2.1), rownames(rjf2.1), rownames(haw2.1)) )%>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% colnames(ber2.1)) %>%
+  group_by(sample) %>%
+  mutate(DP2.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ2.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP2.1_med, GQ2.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat2.1
+plot(sam_ann_mat2.1[,4],sam_ann_mat2.1[,5])
+```
+
+## Create Sample Annotation Matrix (Chrom 3)
+```{r}
+sam_ann_mat3.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber3.1), rownames(dom3.1), rownames(rjf3.1), rownames(haw3.1)) )%>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS %in% colnames(ber3.1)) %>%
+  group_by(sample) %>%
+  mutate(DP3.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ3.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP3.1_med, GQ3.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat3.1
+plot(sam_ann_mat3.1[,4],sam_ann_mat3.1[,5])
+```
+
+## Create Sample Annotation Matrix (Chrom 5)
+```{r}
+sam_ann_mat5.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber5.1), rownames(dom5.1), rownames(rjf5.1), rownames(haw5.1)) )%>%
+  filter(CHROM == 'chr5') %>%
+  filter(POS %in% colnames(ber5.1)) %>%
+  group_by(sample) %>%
+  mutate(DP5.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ5.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP5.1_med, GQ5.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat5.1
+plot(sam_ann_mat5.1[,4],sam_ann_mat5.1[,5])
+```
+
+## Create Sample Annotation Matrix (Chrom 7)
+```{r}
+sam_ann_mat7.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber7.1), rownames(dom7.1), rownames(rjf7.1), rownames(haw7.1)) )%>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS %in% colnames(ber7.1)) %>%
+  group_by(sample) %>%
+  mutate(DP7.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ7.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP7.1_med, GQ7.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_df7.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber7.1), rownames(dom7.1), rownames(rjf7.1), rownames(haw7.1)) )%>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS %in% colnames(ber7.1)) %>%
+  group_by(sample) %>%
+  mutate(DP7.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ7.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP7.1_med, GQ7.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample')
+
+sam_ann_mat7.1
+
+plot(sam_ann_mat7.1[,4],sam_ann_mat7.1[,5])
+sam_ann_df7.1 %>%
+  mutate(cohort = factor(cohort, levels = c('3','1','2','4'))) %>%
+  ggplot(aes(x = DP7.1_med,y=GQ7.1_med, color = cohort)) +
+  geom_point()
+
+
+```
+
+
+# Combine the cohort matrixes into multiple cohorts and single chromosome
+
+## Combine cohort matrices (Chrom 1)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber1.1.2) == colnames(dom1.1.2))
+all(colnames(dom1.1.2) == colnames(rjf1.1.2))
+all(colnames(rjf1.1.2) == colnames(haw1.1.2))
+
+# Create matrix (imputed)
+all1.1.2 <- rbind(ber1.1.2, dom1.1.2, rjf1.1.2, haw1.1.2)
+
+# Rearrange matrix sample order
+all1.1.2 <- all1.1.2[rownames(sam_ann_mat1.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber1.1) == colnames(dom1.1))
+all(colnames(dom1.1) == colnames(rjf1.1))
+all(colnames(rjf1.1) == colnames(haw1.1))
+
+# Create matrix (imputed)
+all1.1 <- rbind(ber1.1, dom1.1, rjf1.1, haw1.1)
+
+# Rearrange matrix sample order
+all1.1 <- all1.1[rownames(sam_ann_mat1.1),]
+```
+
+## Combine cohort matrices (Chrom 2)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber2.1.2) == colnames(dom2.1.2))
+all(colnames(dom2.1.2) == colnames(rjf2.1.2))
+all(colnames(rjf2.1.2) == colnames(haw2.1.2))
+
+# Create matrix (imputed)
+all2.1.2 <- rbind(ber2.1.2, dom2.1.2, rjf2.1.2, haw2.1.2)
+
+# Rearrange matrix sample order
+all2.1.2 <- all2.1.2[rownames(sam_ann_mat2.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber2.1) == colnames(dom2.1))
+all(colnames(dom2.1) == colnames(rjf2.1))
+all(colnames(rjf2.1) == colnames(haw2.1))
+
+# Create matrix (imputed)
+all2.1 <- rbind(ber2.1, dom2.1, rjf2.1, haw2.1)
+
+# Rearrange matrix sample order
+all2.1 <- all2.1[rownames(sam_ann_mat2.1),]
+```
+
+## Combine cohort matrices (Chrom 3)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber3.1.2) == colnames(dom3.1.2))
+all(colnames(dom3.1.2) == colnames(rjf3.1.2))
+all(colnames(rjf3.1.2) == colnames(haw3.1.2))
+
+# Create matrix (imputed)
+all3.1.2 <- rbind(ber3.1.2, dom3.1.2, rjf3.1.2, haw3.1.2)
+
+# Rearrange matrix sample order
+all3.1.2 <- all3.1.2[rownames(sam_ann_mat3.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber3.1) == colnames(dom3.1))
+all(colnames(dom3.1) == colnames(rjf3.1))
+all(colnames(rjf3.1) == colnames(haw3.1))
+
+# Create matrix (imputed)
+all3.1 <- rbind(ber3.1, dom3.1, rjf3.1, haw3.1)
+
+# Rearrange matrix sample order
+all3.1 <- all3.1[rownames(sam_ann_mat3.1),]
+```
+
+## Combine cohort matrices (Chrom 5)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber5.1.2) == colnames(dom5.1.2))
+all(colnames(dom5.1.2) == colnames(rjf5.1.2))
+all(colnames(rjf5.1.2) == colnames(haw5.1.2))
+
+# Create matrix (imputed)
+all5.1.2 <- rbind(ber5.1.2, dom5.1.2, rjf5.1.2, haw5.1.2)
+
+# Rearrange matrix sample order
+all5.1.2 <- all5.1.2[rownames(sam_ann_mat5.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber5.1) == colnames(dom5.1))
+all(colnames(dom5.1) == colnames(rjf5.1))
+all(colnames(rjf5.1) == colnames(haw5.1))
+
+# Create matrix (imputed)
+all5.1 <- rbind(ber5.1, dom5.1, rjf5.1, haw5.1)
+
+# Rearrange matrix sample order
+all5.1 <- all5.1[rownames(sam_ann_mat5.1),]
+```
+
+## Combine cohort matrices (Chrom 7)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber7.1.2) == colnames(dom7.1.2))
+all(colnames(dom7.1.2) == colnames(rjf7.1.2))
+all(colnames(rjf7.1.2) == colnames(haw7.1.2))
+
+# Create matrix (imputed)
+all7.1.2 <- rbind(ber7.1.2, dom7.1.2, rjf7.1.2, haw7.1.2)
+
+# Rearrange matrix sample order
+all7.1.2 <- all7.1.2[rownames(sam_ann_mat7.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber7.1) == colnames(dom7.1))
+all(colnames(dom7.1) == colnames(rjf7.1))
+all(colnames(rjf7.1) == colnames(haw7.1))
+
+# Create matrix (imputed)
+all7.1 <- rbind(ber7.1, dom7.1, rjf7.1, haw7.1)
+
+# Rearrange matrix sample order
+all7.1 <- all7.1[rownames(sam_ann_mat7.1),]
+```
+
+# PCA Plots are Affected by Outlier Samples--Identify, Classify, and Account of Outlier Samples
+
+# NxN Heatmaps and PCA Plots
+
+# NxN Heatmaps (Chrom 1)
+# Most variance is dictated by cohort
+```{r}
+
+# Collect samples with zero standard deviation and remove them
+x <- apply(all1.1,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  print(table(all1.1[zero_sd_sams[i],]))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all1.1),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat1.1)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat1.1, index = 1:nrow(sam_ann_mat1.1))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP1.1_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat1.1)[!row.names(sam_ann_mat1.1) %in% c(zero_sd_sams, low_smed_sams)]
+
+all1.1.cor <- all1.1[var_sams,]
+all1.1.2.cor <- all1.1.2[var_sams,]
+sam_ann_mat1.1.cor <- sam_ann_mat1.1[var_sams,]
+
+cor.tmp<-cor(t(all1.1.cor),method="spearman",use="pairwise.complete.obs")
+
+
+# Add color sidebar for annotations
+a <- min(all1.1.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat1.1.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat1.1.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat1.1.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP1.1_med
+x <- sam_ann_mat1.1.cor[,'DP1.1_med']
+DP1.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ1.1_med
+x <- sam_ann_mat1.1.cor[,'GQ1.1_med']
+GQ1.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP1.1_med.type, DP1.1_med.type, DP1.1_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all1.1.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP1.1_med, GQ1.1_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat1.1.cor[,'cohort'],sam_ann_mat1.1.cor[,'DP1.1_med']),
+          order(sam_ann_mat1.1.cor[,'cohort'],sam_ann_mat1.1.cor[,'DP1.1_med'])],
+  sidebar[order(sam_ann_mat1.1.cor[,'cohort'],sam_ann_mat1.1.cor[,'DP1.1_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 1, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat1.1.cor[,'DP1.1_med'],sam_ann_mat1.1.cor[,'cohort']),
+          order(sam_ann_mat1.1.cor[,'DP1.1_med'],sam_ann_mat1.1.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat1.1.cor[,'DP1.1_med'],sam_ann_mat1.1.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 1, Statified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (Chrom 1)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all1.1.cor)$colInd
+image(
+  cbind(
+    all1.1.cor[order(sam_ann_mat1.1.cor[,'cohort'], row.names(sam_ann_mat1.1.cor)), hmo],
+  sidebar[order(sam_ann_mat1.1.cor[,'cohort'], row.names(sam_ann_mat1.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 1, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all1.1.cor[order(sam_ann_mat1.1.cor[,'cohort'], row.names(sam_ann_mat1.1.cor)), ],
+  sidebar[order(sam_ann_mat1.1.cor[,'cohort'], row.names(sam_ann_mat1.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 1, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (Chrom 1)
+```{r}
+# Annotation
+##################
+
+# Generate the PCA
+pca.res1.1 <- prcomp(t(all1.1.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res1.1$rotation) == rownames(sam_ann_mat1.1.cor))
+pc_var_mat1.1 <- cbind(pca.res1.1$rotation, sam_ann_mat1.1.cor)
+cor.tmp1.1<-cor(pc_var_mat1.1,method="spearman",use="pairwise.complete.obs")
+pc_df1.1 <- round(cor.tmp1.1[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP1.1_med','GQ1.1_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot1.1 <- pca.res1.1$rotation %>% as.data.frame()
+pca_plot1.1 <- cbind(sam_ann_mat1.1.cor, pca_plot1.1[rownames(sam_ann_mat1.1.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP1.1_med, GQ1.1_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (Chrom 1)
+```{r}
+var_df1.1 <- data.frame(PC= 1:length(pca.res1.1$sdev),
+                               var_explained=round((pca.res1.1$sdev)^2/sum((pca.res1.1$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df1.1 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.5) +
+  labs(title=glue("Scree plot: PCA on Chrom 1")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (Chrom 1)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df1.1 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (Chrom 1)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot1.1, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot1.1, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df1.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df1.1[2,2]})")) +
+  ggtitle("Chrom 1: Cohorts")
+
+# By whether domestic or not
+pca_plot1.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df1.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df1.1[2,2]})")) +
+  ggtitle("Chrom 1: Domestic vs Feral")
+
+# By depth
+pca_plot1.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP1.1_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df1.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df1.1[2,2]})")) +
+  ggtitle("Chrom 1: Median Sample Depth")
+```
+
+# NxN Heatmaps (Chrom 2)
+# Most variance is dictated by cohort
+```{r}
+
+# Collect samples with zero standard deviation and remove them
+x <- apply(all2.1,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all2.1[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all2.1),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat2.1)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat2.1, index = 1:nrow(sam_ann_mat2.1))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP2.1_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat2.1)[!row.names(sam_ann_mat2.1) %in% c(zero_sd_sams, low_smed_sams)]
+
+all2.1.cor <- all2.1[var_sams,]
+all2.1.2.cor <- all2.1.2[var_sams,]
+sam_ann_mat2.1.cor <- sam_ann_mat2.1[var_sams,]
+
+cor.tmp<-cor(t(all2.1.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all2.1.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat2.1.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat2.1.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat2.1.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP2.1_med
+x <- sam_ann_mat2.1.cor[,'DP2.1_med']
+DP2.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ2.1_med
+x <- sam_ann_mat2.1.cor[,'GQ2.1_med']
+GQ2.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP2.1_med.type, DP2.1_med.type, DP2.1_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all2.1.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP2.1_med, GQ2.1_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat2.1.cor[,'cohort'],sam_ann_mat2.1.cor[,'DP2.1_med']),
+          order(sam_ann_mat2.1.cor[,'cohort'],sam_ann_mat2.1.cor[,'DP2.1_med'])],
+  sidebar[order(sam_ann_mat2.1.cor[,'cohort'],sam_ann_mat2.1.cor[,'DP2.1_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 2, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat2.1.cor[,'DP2.1_med'],sam_ann_mat2.1.cor[,'cohort']),
+          order(sam_ann_mat2.1.cor[,'DP2.1_med'],sam_ann_mat2.1.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat2.1.cor[,'DP2.1_med'],sam_ann_mat2.1.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 2, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (Chrom 2)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all2.1.cor)$colInd
+image(
+  cbind(
+    all2.1.cor[order(sam_ann_mat2.1.cor[,'cohort'], row.names(sam_ann_mat2.1.cor)), hmo],
+  sidebar[order(sam_ann_mat2.1.cor[,'cohort'], row.names(sam_ann_mat2.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 2, F-HC, Cohort Order, Clustered"), asp = 1,
+  zlim=c(a,3))
+# Unclustered
+image(
+  cbind(
+    all2.1.cor[order(sam_ann_mat2.1.cor[,'cohort'], row.names(sam_ann_mat2.1.cor)), ],
+  sidebar[order(sam_ann_mat2.1.cor[,'cohort'], row.names(sam_ann_mat2.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 2, F-HC, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(a,3))
+```
+
+
+## PCA Prep (Chrom 2)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res2.1 <- prcomp(t(all2.1.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res2.1$rotation) == rownames(sam_ann_mat2.1.cor))
+pc_var_mat2.1 <- cbind(pca.res2.1$rotation, sam_ann_mat2.1.cor)
+cor.tmp2.1<-cor(pc_var_mat2.1,method="spearman",use="pairwise.complete.obs")
+pc_df2.1 <- round(cor.tmp2.1[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP2.1_med','GQ2.1_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot2.1 <- pca.res2.1$rotation %>% as.data.frame()
+pca_plot2.1 <- cbind(sam_ann_mat2.1.cor, pca_plot2.1[rownames(sam_ann_mat2.1.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP2.1_med, GQ2.1_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (Chrom 2)
+```{r}
+var_df2.1 <- data.frame(PC= 1:length(pca.res2.1$sdev),
+                               var_explained=round((pca.res2.1$sdev)^2/sum((pca.res2.1$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df2.1 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.5) +
+  labs(title=glue("Scree plot: PCA on Chrom 2")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (Chrom 2)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df2.1 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (Chrom 2)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot2.1, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot2.1, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df2.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df2.1[2,2]})")) +
+  ggtitle("Chrom 2: Cohorts")
+
+# By whether domestic or not
+pca_plot2.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df2.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df2.1[2,2]})")) +
+  ggtitle("Chrom 2: Domestic vs Feral")
+
+# By depth
+pca_plot2.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP2.1_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df2.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df2.1[2,2]})")) +
+  ggtitle("Chrom 2: Median Sample Depth")
+```
+
+# NxN Heatmaps (Chrom 3)
+# Most variance is dictated by cohort
+```{r}
+
+# Collect samples with zero standard deviation and remove them
+x <- apply(all3.1,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all3.1[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all3.1),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat3.1)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat3.1, index = 1:nrow(sam_ann_mat3.1))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP3.1_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat3.1)[!row.names(sam_ann_mat3.1) %in% c(zero_sd_sams, low_smed_sams)]
+
+all3.1.cor <- all3.1[var_sams,]
+all3.1.2.cor <- all3.1.2[var_sams,]
+sam_ann_mat3.1.cor <- sam_ann_mat3.1[var_sams,]
+
+cor.tmp<-cor(t(all3.1.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all3.1.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat3.1.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat3.1.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat3.1.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP3.1_med
+x <- sam_ann_mat3.1.cor[,'DP3.1_med']
+DP3.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ3.1_med
+x <- sam_ann_mat3.1.cor[,'GQ3.1_med']
+GQ3.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP3.1_med.type, DP3.1_med.type, DP3.1_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all3.1.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP3.1_med, GQ3.1_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat3.1.cor[,'cohort'],sam_ann_mat3.1.cor[,'DP3.1_med']),
+          order(sam_ann_mat3.1.cor[,'cohort'],sam_ann_mat3.1.cor[,'DP3.1_med'])],
+  sidebar[order(sam_ann_mat3.1.cor[,'cohort'],sam_ann_mat3.1.cor[,'DP3.1_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 3, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat3.1.cor[,'DP3.1_med'],sam_ann_mat3.1.cor[,'cohort']),
+          order(sam_ann_mat3.1.cor[,'DP3.1_med'],sam_ann_mat3.1.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat3.1.cor[,'DP3.1_med'],sam_ann_mat3.1.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 3, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (Chrom 3)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all3.1.cor)$colInd
+image(
+  cbind(
+    all3.1.cor[order(sam_ann_mat3.1.cor[,'cohort'], row.names(sam_ann_mat3.1.cor)), hmo],
+  sidebar[order(sam_ann_mat3.1.cor[,'cohort'], row.names(sam_ann_mat3.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 3, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all3.1.cor[order(sam_ann_mat3.1.cor[,'cohort'], row.names(sam_ann_mat3.1.cor)), ],
+  sidebar[order(sam_ann_mat3.1.cor[,'cohort'], row.names(sam_ann_mat3.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 3, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (Chrom 3)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res3.1 <- prcomp(t(all3.1.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res3.1$rotation) == rownames(sam_ann_mat3.1.cor))
+pc_var_mat3.1 <- cbind(pca.res3.1$rotation, sam_ann_mat3.1.cor)
+cor.tmp3.1<-cor(pc_var_mat3.1,method="spearman",use="pairwise.complete.obs")
+pc_df3.1 <- round(cor.tmp3.1[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP3.1_med','GQ3.1_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot3.1 <- pca.res3.1$rotation %>% as.data.frame()
+pca_plot3.1 <- cbind(sam_ann_mat3.1.cor, pca_plot3.1[rownames(sam_ann_mat3.1.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP3.1_med, GQ3.1_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (Chrom 3)
+```{r}
+var_df3.1 <- data.frame(PC= 1:length(pca.res3.1$sdev),
+                               var_explained=round((pca.res3.1$sdev)^2/sum((pca.res3.1$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df3.1 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.5) +
+  labs(title=glue("Scree plot: PCA on Chrom 3")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (Chrom 3)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df3.1 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (Chrom 3)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot3.1, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot3.1, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df3.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df3.1[2,2]})")) +
+  ggtitle("Chrom 3: Cohorts")
+
+# By whether domestic or not
+pca_plot3.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df3.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df3.1[2,2]})")) +
+  ggtitle("Chrom 3: Domestic vs Feral")
+
+# By depth
+pca_plot3.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP3.1_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df3.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df3.1[2,2]})")) +
+  ggtitle("Chrom 3: Median Sample Depth")
+```
+# NxN Heatmaps (Chrom 5)
+# Most variance is dictated by cohort
+```{r}
+
+# Collect samples with zero standard deviation and remove them
+x <- apply(all5.1,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all5.1[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all5.1),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat5.1)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat5.1, index = 1:nrow(sam_ann_mat5.1))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP5.1_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat5.1)[!row.names(sam_ann_mat5.1) %in% c(zero_sd_sams, low_smed_sams)]
+
+all5.1.cor <- all5.1[var_sams,]
+all5.1.2.cor <- all5.1.2[var_sams,]
+sam_ann_mat5.1.cor <- sam_ann_mat5.1[var_sams,]
+
+cor.tmp<-cor(t(all5.1.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all5.1.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat5.1.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat5.1.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat5.1.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP5.1_med
+x <- sam_ann_mat5.1.cor[,'DP5.1_med']
+DP5.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ5.1_med
+x <- sam_ann_mat5.1.cor[,'GQ5.1_med']
+GQ5.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP5.1_med.type, DP5.1_med.type, DP5.1_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all5.1.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP5.1_med, GQ5.1_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat5.1.cor[,'cohort'],sam_ann_mat5.1.cor[,'DP5.1_med']),
+          order(sam_ann_mat5.1.cor[,'cohort'],sam_ann_mat5.1.cor[,'DP5.1_med'])],
+  sidebar[order(sam_ann_mat5.1.cor[,'cohort'],sam_ann_mat5.1.cor[,'DP5.1_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 5, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat5.1.cor[,'DP5.1_med'],sam_ann_mat5.1.cor[,'cohort']),
+          order(sam_ann_mat5.1.cor[,'DP5.1_med'],sam_ann_mat5.1.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat5.1.cor[,'DP5.1_med'],sam_ann_mat5.1.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 5, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (Chrom 5)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all5.1.cor)$colInd
+image(
+  cbind(
+    all5.1.cor[order(sam_ann_mat5.1.cor[,'cohort'], row.names(sam_ann_mat5.1.cor)), hmo],
+  sidebar[order(sam_ann_mat5.1.cor[,'cohort'], row.names(sam_ann_mat5.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 5, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all5.1.cor[order(sam_ann_mat5.1.cor[,'cohort'], row.names(sam_ann_mat5.1.cor)), ],
+  sidebar[order(sam_ann_mat5.1.cor[,'cohort'], row.names(sam_ann_mat5.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 5, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (Chrom 5)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res5.1 <- prcomp(t(all5.1.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res5.1$rotation) == rownames(sam_ann_mat5.1.cor))
+pc_var_mat5.1 <- cbind(pca.res5.1$rotation, sam_ann_mat5.1.cor)
+cor.tmp5.1<-cor(pc_var_mat5.1,method="spearman",use="pairwise.complete.obs")
+pc_df5.1 <- round(cor.tmp5.1[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP5.1_med','GQ5.1_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot5.1 <- pca.res5.1$rotation %>% as.data.frame()
+pca_plot5.1 <- cbind(sam_ann_mat5.1.cor, pca_plot5.1[rownames(sam_ann_mat5.1.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP5.1_med, GQ5.1_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (Chrom 5)
+```{r}
+var_df5.1 <- data.frame(PC= 1:length(pca.res5.1$sdev),
+                               var_explained=round((pca.res5.1$sdev)^2/sum((pca.res5.1$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df5.1 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.5) +
+  labs(title=glue("Scree plot: PCA on Chrom 5")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (Chrom 5)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df5.1 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (Chrom 5)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot5.1, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot5.1, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df5.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df5.1[2,2]})")) +
+  ggtitle("Chrom 5: Cohorts")
+
+# By whether domestic or not
+pca_plot5.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df5.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df5.1[2,2]})")) +
+  ggtitle("Chrom 5: Domestic vs Feral")
+
+# By depth
+pca_plot5.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP5.1_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df5.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df5.1[2,2]})")) +
+  ggtitle("Chrom 5: Median Sample Depth")
+```
+
+# NxN Heatmaps (Chrom 7)
+# Most variance is dictated by cohort
+```{r}
+
+# Collect samples with zero standard deviation and remove them
+x <- apply(all7.1,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all7.1[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all7.1),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat7.1)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat7.1, index = 1:nrow(sam_ann_mat7.1))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP7.1_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat7.1)[!row.names(sam_ann_mat7.1) %in% c(zero_sd_sams, low_smed_sams)]
+
+all7.1.cor <- all7.1[var_sams,]
+all7.1.2.cor <- all7.1.2[var_sams,]
+sam_ann_mat7.1.cor <- sam_ann_mat7.1[var_sams,]
+
+cor.tmp<-cor(t(all7.1.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all7.1.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat7.1.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat7.1.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat7.1.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP7.1_med
+x <- sam_ann_mat7.1.cor[,'DP7.1_med']
+DP7.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ7.1_med
+x <- sam_ann_mat7.1.cor[,'GQ7.1_med']
+GQ7.1_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP7.1_med.type, DP7.1_med.type, DP7.1_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all7.1.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP7.1_med, GQ7.1_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat7.1.cor[,'cohort'],sam_ann_mat7.1.cor[,'DP7.1_med']),
+          order(sam_ann_mat7.1.cor[,'cohort'],sam_ann_mat7.1.cor[,'DP7.1_med'])],
+  sidebar[order(sam_ann_mat7.1.cor[,'cohort'],sam_ann_mat7.1.cor[,'DP7.1_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 7, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat7.1.cor[,'DP7.1_med'],sam_ann_mat7.1.cor[,'cohort']),
+          order(sam_ann_mat7.1.cor[,'DP7.1_med'],sam_ann_mat7.1.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat7.1.cor[,'DP7.1_med'],sam_ann_mat7.1.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("Chrom 7, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (Chrom 7)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all7.1.cor)$colInd
+image(
+  cbind(
+    all7.1.cor[order(sam_ann_mat7.1.cor[,'cohort'], row.names(sam_ann_mat7.1.cor)), hmo],
+  sidebar[order(sam_ann_mat7.1.cor[,'cohort'], row.names(sam_ann_mat7.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 7, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all7.1.cor[order(sam_ann_mat7.1.cor[,'cohort'], row.names(sam_ann_mat7.1.cor)), ],
+  sidebar[order(sam_ann_mat7.1.cor[,'cohort'], row.names(sam_ann_mat7.1.cor)),]),
+  col=redblue100,axes=F,main=glue("Chrom 7, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (Chrom 7)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res7.1 <- prcomp(t(all7.1.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res7.1$rotation) == rownames(sam_ann_mat7.1.cor))
+pc_var_mat7.1 <- cbind(pca.res7.1$rotation, sam_ann_mat7.1.cor)
+cor.tmp7.1<-cor(pc_var_mat7.1,method="spearman",use="pairwise.complete.obs")
+pc_df7.1 <- round(cor.tmp7.1[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP7.1_med','GQ7.1_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot7.1 <- pca.res7.1$rotation %>% as.data.frame()
+pca_plot7.1 <- cbind(sam_ann_mat7.1.cor, pca_plot7.1[rownames(sam_ann_mat7.1.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP7.1_med, GQ7.1_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (Chrom 7)
+```{r}
+var_df7.1 <- data.frame(PC= 1:length(pca.res7.1$sdev),
+                               var_explained=round((pca.res7.1$sdev)^2/sum((pca.res7.1$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df7.1 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on Chrom 7")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (Chrom 7)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df7.1 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (Chrom 7)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot7.1, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot7.1, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df7.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df7.1[2,2]})")) +
+  ggtitle("Chrom 7: Cohorts")
+
+# By whether domestic or not
+pca_plot7.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df7.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df7.1[2,2]})")) +
+  ggtitle("Chrom 7: Domestic vs Feral")
+
+# By depth
+pca_plot7.1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP7.1_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df7.1[1,2]})")) +
+  ylab(glue("PC2 ({var_df7.1[2,2]})")) +
+  ggtitle("Chrom 7: Median Sample Depth")
+```
+
+
+## Subset the Annotated Variants to be QC-Passed Variants (Chrome 1)
+Genes: ENSGALG00000016905 & ENSGALG00000036143
+```{r}
+# Gene 1
+all16905 <- all_df3 %>%
+  filter(CHROM == 'chr1') %>%
+  filter(POS %in% as.numeric(colnames(all1.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000016905') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Gene 2
+all36143 <- all_df3 %>%
+  filter(CHROM == 'chr1') %>%
+  filter(POS %in% as.numeric(colnames(all1.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000036143') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all16905)
+dim(all36143)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000016905)
+```{r}
+sam_ann_mat16905 <- all_df1 %>%
+  filter(sample %in% rownames(all16905) )%>%
+  filter(ensembl_geneid == 'ENSGALG00000016905') %>%
+  filter(POS %in% colnames(all16905)) %>%
+  group_by(sample) %>%
+  mutate(DP16905_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ16905_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP16905_med, GQ16905_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all16905 <- all16905[row.names(sam_ann_mat16905),]
+```
+
+## Impute (ENSGALG00000016905)
+```{r}
+glue("ENSGALG00000016905: features with missing values (rows) before and after imputation")
+all16905.2<-impute.knn(all16905,k=12)$data
+```
+
+# NxN Heatmaps (ENSGALG00000016905)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all16905,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all16905[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all16905),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat16905)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat16905, index = 1:nrow(sam_ann_mat16905))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP16905_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat16905)[!row.names(sam_ann_mat16905) %in% c(zero_sd_sams, low_smed_sams)]
+
+all16905.cor <- all16905[var_sams,]
+all16905.2.cor <- all16905.2[var_sams,]
+sam_ann_mat16905.cor <- sam_ann_mat16905[var_sams,]
+
+cor.tmp<-cor(t(all16905.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all16905.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat16905.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat16905.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat16905.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP16905_med
+x <- sam_ann_mat16905.cor[,'DP16905_med']
+DP16905_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ16905_med
+x <- sam_ann_mat16905.cor[,'GQ16905_med']
+GQ16905_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP16905_med.type, DP16905_med.type, DP16905_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all16905.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP16905_med, GQ16905_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat16905.cor[,'cohort'],sam_ann_mat16905.cor[,'DP16905_med']),
+          order(sam_ann_mat16905.cor[,'cohort'],sam_ann_mat16905.cor[,'DP16905_med'])],
+  sidebar[order(sam_ann_mat16905.cor[,'cohort'],sam_ann_mat16905.cor[,'DP16905_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000016905, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat16905.cor[,'DP16905_med'],sam_ann_mat16905.cor[,'cohort']),
+          order(sam_ann_mat16905.cor[,'DP16905_med'],sam_ann_mat16905.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat16905.cor[,'DP16905_med'],sam_ann_mat16905.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000016905, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000016905)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all16905.cor)$colInd
+image(
+  cbind(
+    all16905.cor[order(sam_ann_mat16905.cor[,'cohort'], row.names(sam_ann_mat16905.cor)), hmo],
+  sidebar[order(sam_ann_mat16905.cor[,'cohort'], row.names(sam_ann_mat16905.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000016905, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all16905.cor[order(sam_ann_mat16905.cor[,'cohort'], row.names(sam_ann_mat16905.cor)), ],
+  sidebar[order(sam_ann_mat16905.cor[,'cohort'], row.names(sam_ann_mat16905.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000016905, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000016905)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res16905 <- prcomp(t(all16905.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res16905$rotation) == rownames(sam_ann_mat16905.cor))
+pc_var_mat16905 <- cbind(pca.res16905$rotation, sam_ann_mat16905.cor)
+cor.tmp16905<-cor(pc_var_mat16905,method="spearman",use="pairwise.complete.obs")
+pc_df16905 <- round(cor.tmp16905[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP16905_med','GQ16905_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot16905 <- pca.res16905$rotation %>% as.data.frame()
+pca_plot16905 <- cbind(sam_ann_mat16905.cor, pca_plot16905[rownames(sam_ann_mat16905.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP16905_med, GQ16905_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000016905)
+```{r}
+var_df16905 <- data.frame(PC= 1:length(pca.res16905$sdev),
+                               var_explained=round((pca.res16905$sdev)^2/sum((pca.res16905$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df16905 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000016905")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000016905)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df16905 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000016905)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot16905, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot16905, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df16905[1,2]})")) +
+  ylab(glue("PC2 ({var_df16905[2,2]})")) +
+  ggtitle("ENSGALG00000016905: Cohorts")
+
+# By whether domestic or not
+pca_plot16905 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df16905[1,2]})")) +
+  ylab(glue("PC2 ({var_df16905[2,2]})")) +
+  ggtitle("ENSGALG00000016905: Domestic vs Feral")
+
+# By depth
+pca_plot16905 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP16905_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df16905[1,2]})")) +
+  ylab(glue("PC2 ({var_df16905[2,2]})")) +
+  ggtitle("ENSGALG00000016905: Median Sample Depth")
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000036143)
+```{r}
+sam_ann_mat36143 <- all_df1 %>%
+  filter(sample %in% rownames(all36143) )%>%
+  filter(ensembl_geneid == 'ENSGALG00000036143') %>%
+  filter(POS %in% colnames(all36143)) %>%
+  group_by(sample) %>%
+  mutate(DP36143_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ36143_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP36143_med, GQ36143_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all36143 <- all36143[row.names(sam_ann_mat36143),]
+```
+
+## Impute
+```{r}
+glue("ENSGALG00000036143: features with missing values (rows) before and after imputation")
+all36143.2<-impute.knn(all36143,k=12)$data
+```
+
+# NxN Heatmaps (ENSGALG00000036143)
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all36143,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all36143[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all36143),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat36143)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat36143, index = 1:nrow(sam_ann_mat36143))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP36143_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat36143)[!row.names(sam_ann_mat36143) %in% c(zero_sd_sams, low_smed_sams)]
+
+all36143.cor <- all36143[var_sams,]
+all36143.2.cor <- all36143.2[var_sams,]
+sam_ann_mat36143.cor <- sam_ann_mat36143[var_sams,]
+
+cor.tmp<-cor(t(all36143.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all36143.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat36143.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat36143.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat36143.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP36143_med
+x <- sam_ann_mat36143.cor[,'DP36143_med']
+DP36143_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ36143_med
+x <- sam_ann_mat36143.cor[,'GQ36143_med']
+GQ36143_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP36143_med.type, DP36143_med.type, DP36143_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all36143.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP36143_med, GQ36143_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat36143.cor[,'cohort'],sam_ann_mat36143.cor[,'DP36143_med']),
+          order(sam_ann_mat36143.cor[,'cohort'],sam_ann_mat36143.cor[,'DP36143_med'])],
+  sidebar[order(sam_ann_mat36143.cor[,'cohort'],sam_ann_mat36143.cor[,'DP36143_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000036143, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat36143.cor[,'DP36143_med'],sam_ann_mat36143.cor[,'cohort']),
+          order(sam_ann_mat36143.cor[,'DP36143_med'],sam_ann_mat36143.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat36143.cor[,'DP36143_med'],sam_ann_mat36143.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000036143, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000036143)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all36143.cor)$colInd
+image(
+  cbind(
+    all36143.cor[order(sam_ann_mat36143.cor[,'cohort'], row.names(sam_ann_mat36143.cor)), hmo],
+  sidebar[order(sam_ann_mat36143.cor[,'cohort'], row.names(sam_ann_mat36143.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000036143, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all36143.cor[order(sam_ann_mat36143.cor[,'cohort'], row.names(sam_ann_mat36143.cor)), ],
+  sidebar[order(sam_ann_mat36143.cor[,'cohort'], row.names(sam_ann_mat36143.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000036143, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000036143)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res36143 <- prcomp(t(all36143.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res36143$rotation) == rownames(sam_ann_mat36143.cor))
+pc_var_mat36143 <- cbind(pca.res36143$rotation, sam_ann_mat36143.cor)
+cor.tmp36143<-cor(pc_var_mat36143,method="spearman",use="pairwise.complete.obs")
+pc_df36143 <- round(cor.tmp36143[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP36143_med','GQ36143_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot36143 <- pca.res36143$rotation %>% as.data.frame()
+pca_plot36143 <- cbind(sam_ann_mat36143.cor, pca_plot36143[rownames(sam_ann_mat36143.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP36143_med, GQ36143_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000036143)
+```{r}
+var_df36143 <- data.frame(PC= 1:length(pca.res36143$sdev),
+                               var_explained=round((pca.res36143$sdev)^2/sum((pca.res36143$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df36143 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000036143")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000036143)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df36143 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000036143)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot36143, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot36143, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df36143[1,2]})")) +
+  ylab(glue("PC2 ({var_df36143[2,2]})")) +
+  ggtitle("ENSGALG00000036143: Cohorts")
+
+# By whether domestic or not
+pca_plot36143 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df36143[1,2]})")) +
+  ylab(glue("PC2 ({var_df36143[2,2]})")) +
+  ggtitle("ENSGALG00000036143: Domestic vs Feral")
+
+# By depth
+pca_plot36143 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP36143_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df36143[1,2]})")) +
+  ylab(glue("PC2 ({var_df36143[2,2]})")) +
+  ggtitle("ENSGALG00000036143: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (Chrome 2)
+Gene: ENSGALG00000019509 (multiple var types)
+```{r}
+all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  select(ensembl_geneid) %>% table()
+
+# Gene 1
+all19509 <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509)
+```{r}
+sam_ann_mat19509 <- all_df1 %>%
+  filter(sample %in% rownames(all19509) )%>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(POS %in% colnames(all19509)) %>%
+  group_by(sample) %>%
+  mutate(DP19509_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509_med, GQ19509_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509 <- all19509[row.names(sam_ann_mat19509),]
+```
+
+## Impute (ENSGALG00000019509)
+```{r}
+glue("ENSGALG00000019509: features with missing values (rows) before and after imputation")
+all19509.2<-impute.knn(all19509,k=12)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509, index = 1:nrow(sam_ann_mat19509))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509)[!row.names(sam_ann_mat19509) %in% c(zero_sd_sams, low_smed_sams)]
+
+all19509.cor <- all19509[var_sams,]
+all19509.2.cor <- all19509.2[var_sams,]
+sam_ann_mat19509.cor <- sam_ann_mat19509[var_sams,]
+
+cor.tmp<-cor(t(all19509.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509_med
+x <- sam_ann_mat19509.cor[,'DP19509_med']
+DP19509_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509_med
+x <- sam_ann_mat19509.cor[,'GQ19509_med']
+GQ19509_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509_med.type, DP19509_med.type, DP19509_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509_med, GQ19509_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.cor[,'cohort'],sam_ann_mat19509.cor[,'DP19509_med']),
+          order(sam_ann_mat19509.cor[,'cohort'],sam_ann_mat19509.cor[,'DP19509_med'])],
+  sidebar[order(sam_ann_mat19509.cor[,'cohort'],sam_ann_mat19509.cor[,'DP19509_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.cor[,'DP19509_med'],sam_ann_mat19509.cor[,'cohort']),
+          order(sam_ann_mat19509.cor[,'DP19509_med'],sam_ann_mat19509.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.cor[,'DP19509_med'],sam_ann_mat19509.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all19509.cor)$colInd
+image(
+  cbind(
+    all19509.cor[order(sam_ann_mat19509.cor[,'cohort'], row.names(sam_ann_mat19509.cor)), hmo],
+  sidebar[order(sam_ann_mat19509.cor[,'cohort'], row.names(sam_ann_mat19509.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all19509.cor[order(sam_ann_mat19509.cor[,'cohort'], row.names(sam_ann_mat19509.cor)), ],
+  sidebar[order(sam_ann_mat19509.cor[,'cohort'], row.names(sam_ann_mat19509.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509 <- prcomp(t(all19509.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509$rotation) == rownames(sam_ann_mat19509.cor))
+pc_var_mat19509 <- cbind(pca.res19509$rotation, sam_ann_mat19509.cor)
+cor.tmp19509<-cor(pc_var_mat19509,method="spearman",use="pairwise.complete.obs")
+pc_df19509 <- round(cor.tmp19509[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP19509_med','GQ19509_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot19509 <- pca.res19509$rotation %>% as.data.frame()
+pca_plot19509 <- cbind(sam_ann_mat19509.cor, pca_plot19509[rownames(sam_ann_mat19509.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509_med, GQ19509_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509)
+```{r}
+var_df19509 <- data.frame(PC= 1:length(pca.res19509$sdev),
+                               var_explained=round((pca.res19509$sdev)^2/sum((pca.res19509$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509 %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509 %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509[2,2]})")) +
+  ggtitle("ENSGALG00000019509: Cohorts")
+
+# By whether domestic or not
+pca_plot19509 %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509[2,2]})")) +
+  ggtitle("ENSGALG00000019509: Domestic vs Feral")
+
+# By depth
+pca_plot19509 %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509[2,2]})")) +
+  ggtitle("ENSGALG00000019509: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (ENSGALG00000019509)
+Gene: ENSGALG00000019509 (missense)
+```{r}
+all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  select(var_type, var_impact) %>% table()
+
+# Gene 1
+all19509.mis <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'missense_variant') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509.mis)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509.mis)
+```{r}
+sam_ann_mat19509.mis <- all_df1 %>%
+  filter(sample %in% rownames(all19509.mis) ) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'missense_variant') %>%
+  filter(POS %in% colnames(all19509.mis)) %>%
+  group_by(sample) %>%
+  mutate(DP19509.mis_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509.mis_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.mis_med, GQ19509.mis_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509.mis <- all19509.mis[row.names(sam_ann_mat19509.mis),]
+```
+
+## Impute (ENSGALG00000019509.mis)
+```{r}
+glue("ENSGALG00000019509.mis: features with missing values (rows) before and after imputation")
+all19509.mis.2<-impute.knn(all19509.mis,k=3)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509.mis)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509.mis,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509.mis[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509.mis),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509.mis)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509.mis, index = 1:nrow(sam_ann_mat19509.mis))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509.mis_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509.mis)[!row.names(sam_ann_mat19509.mis) %in% c(zero_sd_sams, low_smed_sams)]
+
+all19509.mis.cor <- all19509.mis[var_sams,]
+all19509.mis.2.cor <- all19509.mis.2[var_sams,]
+sam_ann_mat19509.mis.cor <- sam_ann_mat19509.mis[var_sams,]
+
+cor.tmp<-cor(t(all19509.mis.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.mis.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.mis.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.mis.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.mis.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509.mis_med
+x <- sam_ann_mat19509.mis.cor[,'DP19509.mis_med']
+DP19509.mis_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509.mis_med
+x <- sam_ann_mat19509.mis.cor[,'GQ19509.mis_med']
+GQ19509.mis_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509.mis_med.type, DP19509.mis_med.type, DP19509.mis_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.mis.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509.mis_med, GQ19509.mis_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.mis.cor[,'cohort'],sam_ann_mat19509.mis.cor[,'DP19509.mis_med']),
+          order(sam_ann_mat19509.mis.cor[,'cohort'],sam_ann_mat19509.mis.cor[,'DP19509.mis_med'])],
+  sidebar[order(sam_ann_mat19509.mis.cor[,'cohort'],sam_ann_mat19509.mis.cor[,'DP19509.mis_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.mis, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.mis.cor[,'DP19509.mis_med'],sam_ann_mat19509.mis.cor[,'cohort']),
+          order(sam_ann_mat19509.mis.cor[,'DP19509.mis_med'],sam_ann_mat19509.mis.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.mis.cor[,'DP19509.mis_med'],sam_ann_mat19509.mis.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.mis, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509.mis)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all19509.mis.cor)$colInd
+image(
+  cbind(
+    all19509.mis.cor[order(sam_ann_mat19509.mis.cor[,'cohort'], row.names(sam_ann_mat19509.mis.cor)), hmo],
+  sidebar[order(sam_ann_mat19509.mis.cor[,'cohort'], row.names(sam_ann_mat19509.mis.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.mis, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all19509.mis.cor[order(sam_ann_mat19509.mis.cor[,'cohort'], row.names(sam_ann_mat19509.mis.cor)), ],
+  sidebar[order(sam_ann_mat19509.mis.cor[,'cohort'], row.names(sam_ann_mat19509.mis.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.mis, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509.mis)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509.mis <- prcomp(t(all19509.mis.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509.mis$rotation) == rownames(sam_ann_mat19509.mis.cor))
+pc_var_mat19509.mis <- cbind(pca.res19509.mis$rotation, sam_ann_mat19509.mis.cor)
+cor.tmp19509.mis<-cor(pc_var_mat19509.mis,method="spearman",use="pairwise.complete.obs")
+pc_df19509.mis <- round(cor.tmp19509.mis[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP19509.mis_med','GQ19509.mis_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot19509.mis <- pca.res19509.mis$rotation %>% as.data.frame()
+pca_plot19509.mis <- cbind(sam_ann_mat19509.mis.cor, pca_plot19509.mis[rownames(sam_ann_mat19509.mis.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.mis_med, GQ19509.mis_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509.mis)
+```{r}
+var_df19509.mis <- data.frame(PC= 1:length(pca.res19509.mis$sdev),
+                               var_explained=round((pca.res19509.mis$sdev)^2/sum((pca.res19509.mis$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509.mis %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509.mis")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509.mis)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509.mis %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509.mis)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509.mis, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509.mis, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.mis[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.mis[2,2]})")) +
+  ggtitle("ENSGALG00000019509.mis: Cohorts")
+
+# By whether domestic or not
+pca_plot19509.mis %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.mis[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.mis[2,2]})")) +
+  ggtitle("ENSGALG00000019509.mis: Domestic vs Feral")
+
+# By depth
+pca_plot19509.mis %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509.mis_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.mis[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.mis[2,2]})")) +
+  ggtitle("ENSGALG00000019509.mis: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (ENSGALG00000019509)
+Gene: ENSGALG00000019509 (intron_variant)
+```{r}
+all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  select(var_type, var_impact) %>% table()
+
+# Gene 1
+all19509.int <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'intron_variant') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509.int)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509.int)
+```{r}
+sam_ann_mat19509.int <- all_df1 %>%
+  filter(sample %in% rownames(all19509.int) ) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'intron_variant') %>%
+  filter(POS %in% colnames(all19509.int)) %>%
+  group_by(sample) %>%
+  mutate(DP19509.int_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509.int_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.int_med, GQ19509.int_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509.int <- all19509.int[row.names(sam_ann_mat19509.int),]
+```
+
+## Impute (ENSGALG00000019509.int)
+```{r}
+glue("ENSGALG00000019509.int: features with intsing values (rows) before and after imputation")
+all19509.int.2<-impute.knn(all19509.int,k=3)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509.int)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509.int,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509.int[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509.int),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509.int)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509.int, index = 1:nrow(sam_ann_mat19509.int))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509.int_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509.int)[!row.names(sam_ann_mat19509.int) %in% c(zero_sd_sams, low_smed_sams)]
+
+all19509.int.cor <- all19509.int[var_sams,]
+all19509.int.2.cor <- all19509.int.2[var_sams,]
+sam_ann_mat19509.int.cor <- sam_ann_mat19509.int[var_sams,]
+
+cor.tmp<-cor(t(all19509.int.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.int.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.int.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.int.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.int.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509.int_med
+x <- sam_ann_mat19509.int.cor[,'DP19509.int_med']
+DP19509.int_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509.int_med
+x <- sam_ann_mat19509.int.cor[,'GQ19509.int_med']
+GQ19509.int_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509.int_med.type, DP19509.int_med.type, DP19509.int_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.int.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509.int_med, GQ19509.int_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.int.cor[,'cohort'],sam_ann_mat19509.int.cor[,'DP19509.int_med']),
+          order(sam_ann_mat19509.int.cor[,'cohort'],sam_ann_mat19509.int.cor[,'DP19509.int_med'])],
+  sidebar[order(sam_ann_mat19509.int.cor[,'cohort'],sam_ann_mat19509.int.cor[,'DP19509.int_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.int, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.int.cor[,'DP19509.int_med'],sam_ann_mat19509.int.cor[,'cohort']),
+          order(sam_ann_mat19509.int.cor[,'DP19509.int_med'],sam_ann_mat19509.int.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.int.cor[,'DP19509.int_med'],sam_ann_mat19509.int.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.int, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509.int)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type,
+               cohort.type, cohort.type, cohort.type, cohort.type, cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all19509.int.cor)$colInd
+image(
+  cbind(
+    all19509.int.cor[order(sam_ann_mat19509.int.cor[,'cohort'], row.names(sam_ann_mat19509.int.cor)), hmo],
+  sidebar[order(sam_ann_mat19509.int.cor[,'cohort'], row.names(sam_ann_mat19509.int.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.int, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all19509.int.cor[order(sam_ann_mat19509.int.cor[,'cohort'], row.names(sam_ann_mat19509.int.cor)), ],
+  sidebar[order(sam_ann_mat19509.int.cor[,'cohort'], row.names(sam_ann_mat19509.int.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.int, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509.int)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509.int <- prcomp(t(all19509.int.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509.int$rotation) == rownames(sam_ann_mat19509.int.cor))
+pc_var_mat19509.int <- cbind(pca.res19509.int$rotation, sam_ann_mat19509.int.cor)
+cor.tmp19509.int<-cor(pc_var_mat19509.int,method="spearman",use="pairwise.complete.obs")
+pc_df19509.int <- round(cor.tmp19509.int[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP19509.int_med','GQ19509.int_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot19509.int <- pca.res19509.int$rotation %>% as.data.frame()
+pca_plot19509.int <- cbind(sam_ann_mat19509.int.cor, pca_plot19509.int[rownames(sam_ann_mat19509.int.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.int_med, GQ19509.int_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509.int)
+```{r}
+var_df19509.int <- data.frame(PC= 1:length(pca.res19509.int$sdev),
+                               var_explained=round((pca.res19509.int$sdev)^2/sum((pca.res19509.int$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509.int %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509.int")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509.int)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509.int %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509.int)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509.int, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509.int, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.int[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.int[2,2]})")) +
+  ggtitle("ENSGALG00000019509.int: Cohorts")
+
+# By whether domestic or not
+pca_plot19509.int %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.int[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.int[2,2]})")) +
+  ggtitle("ENSGALG00000019509.int: Domestic vs Feral")
+
+# By depth
+pca_plot19509.int %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509.int_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.int[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.int[2,2]})")) +
+  ggtitle("ENSGALG00000019509.int: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (ENSGALG00000019509)
+Gene: ENSGALG00000019509 (synonymous_variant)
+```{r}
+all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  select(var_type, var_impact) %>% table()
+
+# Gene 1
+all19509.syn <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'synonymous_variant') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509.syn)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509.syn)
+```{r}
+sam_ann_mat19509.syn <- all_df1 %>%
+  filter(sample %in% rownames(all19509.syn) ) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == 'synonymous_variant') %>%
+  filter(POS %in% colnames(all19509.syn)) %>%
+  group_by(sample) %>%
+  mutate(DP19509.syn_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509.syn_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.syn_med, GQ19509.syn_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509.syn <- all19509.syn[row.names(sam_ann_mat19509.syn),]
+```
+
+## Impute (ENSGALG00000019509.syn)
+```{r}
+glue("ENSGALG00000019509.syn: features with intsing values (rows) before and after imputation")
+all19509.syn.2<-impute.knn(all19509.syn,k=3)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509.syn)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509.syn,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509.syn[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509.syn),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509.syn)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509.syn, index = 1:nrow(sam_ann_mat19509.syn))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509.syn_med)) +
+  geom_point(shape = 1)
+
+# low_smed_sams <- df %>%
+#   filter(s_med < 0.01 | is.na(s_med)) %>%
+#   select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509.syn)[!row.names(sam_ann_mat19509.syn) %in% c(zero_sd_sams)]
+
+all19509.syn.cor <- all19509.syn[var_sams,]
+all19509.syn.2.cor <- all19509.syn.2[var_sams,]
+sam_ann_mat19509.syn.cor <- sam_ann_mat19509.syn[var_sams,]
+
+cor.tmp<-cor(t(all19509.syn.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.syn.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.syn.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.syn.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.syn.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509.syn_med
+x <- sam_ann_mat19509.syn.cor[,'DP19509.syn_med']
+DP19509.syn_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509.syn_med
+x <- sam_ann_mat19509.syn.cor[,'GQ19509.syn_med']
+GQ19509.syn_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509.syn_med.type, DP19509.syn_med.type, DP19509.syn_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.syn.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509.syn_med, GQ19509.syn_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.syn.cor[,'cohort'],sam_ann_mat19509.syn.cor[,'DP19509.syn_med']),
+          order(sam_ann_mat19509.syn.cor[,'cohort'],sam_ann_mat19509.syn.cor[,'DP19509.syn_med'])],
+  sidebar[order(sam_ann_mat19509.syn.cor[,'cohort'],sam_ann_mat19509.syn.cor[,'DP19509.syn_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.syn, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.syn.cor[,'DP19509.syn_med'],sam_ann_mat19509.syn.cor[,'cohort']),
+          order(sam_ann_mat19509.syn.cor[,'DP19509.syn_med'],sam_ann_mat19509.syn.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.syn.cor[,'DP19509.syn_med'],sam_ann_mat19509.syn.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.syn, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509.syn)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+
+# Unclustered
+image(
+  cbind(
+    all19509.syn.cor[order(sam_ann_mat19509.syn.cor[,'cohort'], row.names(sam_ann_mat19509.syn.cor)), ],
+  sidebar[order(sam_ann_mat19509.syn.cor[,'cohort'], row.names(sam_ann_mat19509.syn.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.syn, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509.syn)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509.syn <- prcomp(t(all19509.syn.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509.syn$rotation) == rownames(sam_ann_mat19509.syn.cor))
+pc_var_mat19509.syn <- cbind(pca.res19509.syn$rotation, sam_ann_mat19509.syn.cor)
+cor.tmp19509.syn<-cor(pc_var_mat19509.syn,method="spearman",use="pairwise.complete.obs")
+pc_df19509.syn <- round(cor.tmp19509.syn[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7'),
+                c('cohort','dom','pooled','DP19509.syn_med','GQ19509.syn_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)))
+
+pca_plot19509.syn <- pca.res19509.syn$rotation %>% as.data.frame()
+pca_plot19509.syn <- cbind(sam_ann_mat19509.syn.cor, pca_plot19509.syn[rownames(sam_ann_mat19509.syn.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.syn_med, GQ19509.syn_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509.syn)
+```{r}
+var_df19509.syn <- data.frame(PC= 1:length(pca.res19509.syn$sdev),
+                               var_explained=round((pca.res19509.syn$sdev)^2/sum((pca.res19509.syn$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509.syn %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509.syn")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509.syn)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509.syn %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509.syn)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509.syn, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509.syn, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.syn[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.syn[2,2]})")) +
+  ggtitle("ENSGALG00000019509.syn: Cohorts")
+
+# By whether domestic or not
+pca_plot19509.syn %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.syn[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.syn[2,2]})")) +
+  ggtitle("ENSGALG00000019509.syn: Domestic vs Feral")
+
+# By depth
+pca_plot19509.syn %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509.syn_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.syn[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.syn[2,2]})")) +
+  ggtitle("ENSGALG00000019509.syn: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (ENSGALG00000019509)
+Gene: ENSGALG00000019509 (3_prime_UTR_variant)
+```{r}
+all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  select(var_type, var_impact) %>% table()
+
+# Gene 1
+all19509.utr <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == '3_prime_UTR_variant') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509.utr)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509.utr)
+```{r}
+sam_ann_mat19509.utr <- all_df1 %>%
+  filter(sample %in% rownames(all19509.utr) ) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == '3_prime_UTR_variant') %>%
+  filter(POS %in% colnames(all19509.utr)) %>%
+  group_by(sample) %>%
+  mutate(DP19509.utr_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509.utr_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509.utr <- all19509.utr[row.names(sam_ann_mat19509.utr),]
+```
+
+## Impute (ENSGALG00000019509.utr)
+```{r}
+glue("ENSGALG00000019509.utr: features with missing values (rows) before and after imputation")
+all19509.utr.2<-impute.knn(all19509.utr,k=9)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509.utr)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509.utr,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509.utr[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509.utr),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509.utr)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509.utr, index = 1:nrow(sam_ann_mat19509.utr))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509.utr_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509.utr)[!row.names(sam_ann_mat19509.utr) %in% c(zero_sd_sams, low_smed_sams)]
+
+all19509.utr.cor <- all19509.utr[var_sams,]
+all19509.utr.2.cor <- all19509.utr.2[var_sams,]
+sam_ann_mat19509.utr.cor <- sam_ann_mat19509.utr[var_sams,]
+
+cor.tmp<-cor(t(all19509.utr.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.utr.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.utr.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.utr.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.utr.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509.utr_med
+x <- sam_ann_mat19509.utr.cor[,'DP19509.utr_med']
+DP19509.utr_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509.utr_med
+x <- sam_ann_mat19509.utr.cor[,'GQ19509.utr_med']
+GQ19509.utr_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509.utr_med.type, DP19509.utr_med.type, DP19509.utr_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.utr.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med']),
+          order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med'])],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.utr, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort']),
+          order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.utr, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509.utr)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all19509.utr.cor)$colInd
+image(
+  cbind(
+    all19509.utr.cor[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)), hmo],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.utr, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all19509.utr.cor[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)), ],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.utr, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509.utr)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509.utr <- prcomp(t(all19509.utr.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509.utr$rotation) == rownames(sam_ann_mat19509.utr.cor))
+pc_var_mat19509.utr <- cbind(pca.res19509.utr$rotation, sam_ann_mat19509.utr.cor)
+cor.tmp19509.utr<-cor(pc_var_mat19509.utr,method="spearman",use="pairwise.complete.obs")
+pc_df19509.utr <- round(cor.tmp19509.utr[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP19509.utr_med','GQ19509.utr_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot19509.utr <- pca.res19509.utr$rotation %>% as.data.frame()
+pca_plot19509.utr <- cbind(sam_ann_mat19509.utr.cor, pca_plot19509.utr[rownames(sam_ann_mat19509.utr.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509.utr)
+```{r}
+var_df19509.utr <- data.frame(PC= 1:length(pca.res19509.utr$sdev),
+                               var_explained=round((pca.res19509.utr$sdev)^2/sum((pca.res19509.utr$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509.utr %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509.utr")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509.utr)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509.utr %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509.utr)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509.utr, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509.utr, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Cohorts")
+
+# By whether domestic or not
+pca_plot19509.utr %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Domestic vs Feral")
+
+# By depth
+pca_plot19509.utr %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509.utr_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Median Sample Depth")
+```
+
+## Subset the Annotated Variants to be QC-Passed Variants (Chrom 3)
+Gene: 
+```{r}
+
+length(haw_sams)
+length(ber_sams)
+length(dom_sams)
+length(rjf_sams)
+
+all_df3 %>%
+  filter(sample %in% haw_sams) %>%
+  filter(GQ > 30) %>%
+  select(gene_symbol, var_impact) %>% table()
+
+all_df3 %>%
+  filter(sample %in% ber_sams) %>%
+  filter(GQ > 30) %>%
+  select(gene_symbol, var_impact) %>% table()
+
+all_df3 %>%
+  filter(sample %in% dom_sams) %>%
+  filter(GQ > 30) %>%
+  select(gene_symbol, var_impact) %>% table()
+
+all_df3 %>%
+  filter(sample %in% rjf_sams) %>%
+  filter(GQ > 30) %>%
+  select(gene_symbol, var_impact) %>% table()
+
+
+all_df3 %>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS %in% as.numeric(colnames(all7.1))) %>%
+  select(gene_symbol, var_impact) %>% table()
+  filter(ensembl_geneid == 'ENSGALG00000037681') %>%
+  select(var_type, var_impact) %>% table()
+
+# Gene 1
+all19509.utr <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% as.numeric(colnames(all2.1))) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == '3_prime_UTR_variant') %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, POS, SNP_VAL) %>%
+  unique() %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Dimensions
+dim(all19509.utr)
+```
+
+## Create Sample Annotation Matrix (ENSGALG00000019509.utr)
+```{r}
+sam_ann_mat19509.utr <- all_df1 %>%
+  filter(sample %in% rownames(all19509.utr) ) %>%
+  filter(ensembl_geneid == 'ENSGALG00000019509') %>%
+  filter(var_type == '3_prime_UTR_variant') %>%
+  filter(POS %in% colnames(all19509.utr)) %>%
+  group_by(sample) %>%
+  mutate(DP19509.utr_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ19509.utr_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'haw' ~ 2,
+                            cohort == 'ber' ~ 3,
+                            cohort == 'rjf' ~ 4)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+# Reorder matrix to coincide with sample annotations
+all19509.utr <- all19509.utr[row.names(sam_ann_mat19509.utr),]
+```
+
+## Impute (ENSGALG00000019509.utr)
+```{r}
+glue("ENSGALG00000019509.utr: features with missing values (rows) before and after imputation")
+all19509.utr.2<-impute.knn(all19509.utr,k=9)$data
+```
+
+# NxN Heatmaps (ENSGALG00000019509.utr)
+# Most variance is dictated by cohort
+```{r}
+# Collect samples with zero standard deviation and remove them
+x <- apply(all19509.utr,1,function(x) sd(x, na.rm = TRUE)) 
+zero_sd_sams <- names(x[x<0.001])
+
+for(i in 1:length(zero_sd_sams)){
+  print(zero_sd_sams[i])
+  try(print(table(all19509.utr[zero_sd_sams[i],])))
+}
+
+# Collect samples with minimal SNPs (low sample medians)
+cor.tmp<-cor(t(all19509.utr),method="spearman",use="pairwise.complete.obs")
+plot(apply(cor.tmp,1,median, na.rm = TRUE)); abline(h=0.01, col = 'blue')
+
+x <- apply(cor.tmp,1,median, na.rm = TRUE)
+names(x) == row.names(sam_ann_mat19509.utr)
+df <- data.frame('sample' = names(x), 's_med' = x, sam_ann_mat19509.utr, index = 1:nrow(sam_ann_mat19509.utr))
+df %>%
+  ggplot(aes(x = index, s_med, color = as.factor(cohort))) +
+  geom_point(shape = 1)
+
+df %>%
+  ggplot(aes(x = index, s_med, color = DP19509.utr_med)) +
+  geom_point(shape = 1)
+
+low_smed_sams <- df %>%
+  filter(s_med < 0.01 | is.na(s_med)) %>%
+  select(sample) %>% unlist() %>% unname()
+
+# not zero sd sams
+var_sams <- row.names(sam_ann_mat19509.utr)[!row.names(sam_ann_mat19509.utr) %in% c(zero_sd_sams, low_smed_sams)]
+
+all19509.utr.cor <- all19509.utr[var_sams,]
+all19509.utr.2.cor <- all19509.utr.2[var_sams,]
+sam_ann_mat19509.utr.cor <- sam_ann_mat19509.utr[var_sams,]
+
+cor.tmp<-cor(t(all19509.utr.cor),method="spearman",use="pairwise.complete.obs")
+
+# Add color sidebar for annotations
+a <- min(all19509.utr.cor, na.rm = TRUE)
+b <- 1
+# Cohort
+x <- sam_ann_mat19509.utr.cor[,'cohort']
+cohort.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# dom
+x <- sam_ann_mat19509.utr.cor[,'dom']
+dom.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# pooled
+x <- sam_ann_mat19509.utr.cor[,'pooled']
+pooled.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# DP19509.utr_med
+x <- sam_ann_mat19509.utr.cor[,'DP19509.utr_med']
+DP19509.utr_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+# GQ19509.utr_med
+x <- sam_ann_mat19509.utr.cor[,'GQ19509.utr_med']
+GQ19509.utr_med.type <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a)
+
+sidebar<-cbind(cohort.type, cohort.type, cohort.type,
+               DP19509.utr_med.type, DP19509.utr_med.type, DP19509.utr_med.type)
+
+# sidebar  <- ( (b - a) * ((x - min(x))/((max(x) - min(x)))) + a) 
+# sidebar <- cbind(sidebar,sidebar,sidebar)
+cor.tmp<-cor(t(all19509.utr.cor),method="spearman",use="pairwise.complete.obs")
+dim(cor.tmp)
+
+#cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med
+#STartified by Cohort
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med']),
+          order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med'])],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'],sam_ann_mat19509.utr.cor[,'DP19509.utr_med']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.utr, Statified by Cohort, z=({a},{b})"), asp = 1)
+
+#STartified by Depth
+image(
+  cbind(
+  cor.tmp[order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort']),
+          order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort'])],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'DP19509.utr_med'],sam_ann_mat19509.utr.cor[,'cohort']),]),
+  col=redblue100,axes=FALSE, zlim=c(a,b), main=glue("ENSGALG00000019509.utr, Stratified by Depth, z=({a},{b})"), asp = 1)
+
+```
+
+# NxP Heatmap (ENSGALG00000019509.utr)
+```{r}
+# Ann
+sidebar<-cbind(cohort.type)
+sidebar <- sidebar*3
+# Clustered
+hmo <- heatmap(all19509.utr.cor)$colInd
+image(
+  cbind(
+    all19509.utr.cor[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)), hmo],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.utr, F-HC, Cohort Order, Clustered"), asp = 1)
+# Unclustered
+image(
+  cbind(
+    all19509.utr.cor[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)), ],
+  sidebar[order(sam_ann_mat19509.utr.cor[,'cohort'], row.names(sam_ann_mat19509.utr.cor)),]),
+  col=redblue100,axes=F,main=glue("ENSGALG00000019509.utr, F-HC, Cohort Order, Unclustered"), asp = 1)
+```
+
+
+## PCA Prep (ENSGALG00000019509.utr)
+```{r}
+# Annotation
+##################
+# Generate the PCA
+pca.res19509.utr <- prcomp(t(all19509.utr.2.cor), center = TRUE)
+
+# PC Correlations with meta data
+all(row.names(pca.res19509.utr$rotation) == rownames(sam_ann_mat19509.utr.cor))
+pc_var_mat19509.utr <- cbind(pca.res19509.utr$rotation, sam_ann_mat19509.utr.cor)
+cor.tmp19509.utr<-cor(pc_var_mat19509.utr,method="spearman",use="pairwise.complete.obs")
+pc_df19509.utr <- round(cor.tmp19509.utr[c('PC1','PC2','PC3','PC4','PC5','PC6','PC7','PC8'),
+                c('cohort','dom','pooled','DP19509.utr_med','GQ19509.utr_med')], digits = 2) %>%
+    t() %>% as.data.frame() %>% arrange(desc(abs(PC1)), desc(abs(PC2)), desc(abs(PC3)), desc(abs(PC4)),
+                                      desc(abs(PC5)), desc(abs(PC6)), desc(abs(PC7)), desc(abs(PC8)))
+
+pca_plot19509.utr <- pca.res19509.utr$rotation %>% as.data.frame()
+pca_plot19509.utr <- cbind(sam_ann_mat19509.utr.cor, pca_plot19509.utr[rownames(sam_ann_mat19509.utr.cor),]) %>%
+  mutate(cohort = as.integer(cohort)) %>%
+  mutate(cohort = case_when(cohort == 1 ~ 'dom',
+                   cohort == 2 ~ 'haw',
+                   cohort == 3 ~ 'ber',
+                   cohort == 4 ~ 'rjf')) %>%
+  mutate(dom = as.integer(dom)) %>%
+  mutate(pooled = as.integer(pooled)) %>%
+  rownames_to_column(var = 'sample') %>%
+  group_by(cohort) %>%
+  mutate(PC1_mu = median(PC1, na.rm = TRUE)) %>%
+  mutate(PC2_mu = median(PC2, na.rm = TRUE)) %>%
+  mutate(PC3_mu = median(PC3, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP19509.utr_med, GQ19509.utr_med, PC1, PC2, PC3, PC1_mu, PC2_mu, PC3_mu) 
+```
+
+##  Visualize the percent variance explained and associated metadata variables (ENSGALG00000019509.utr)
+```{r}
+var_df19509.utr <- data.frame(PC= 1:length(pca.res19509.utr$sdev),
+                               var_explained=round((pca.res19509.utr$sdev)^2/sum((pca.res19509.utr$sdev)^2), digits = 3)) %>%
+  arrange(desc(var_explained))
+var_df19509.utr %>%
+  ggplot(aes(x=PC,y=var_explained))+
+  geom_point(size=2)+
+  geom_line(alpha = 0.4)+
+  ylim(0,0.8) +
+  labs(title=glue("Scree plot: PCA on ENSGALG00000019509.utr")) +
+  theme(aspect.ratio = 1)
+```
+
+# PCs Associated with Variables (ENSGALG00000019509.utr)
+```{r}
+# PCs associated with variables
+if(knit_time){
+   pc_df19509.utr %>%
+    knitr::kable(format = "html") %>%
+    scroll_box(width = "100%", height = "100%")
+}
+```
+
+## Plot the PCA annotated (ENSGALG00000019509.utr)
+```{r}
+# Cohort with centroids
+ggplot() +
+  geom_point(data = pca_plot19509.utr, aes(x = PC1, y = PC2, color = as.factor(cohort))) +
+  geom_point(data = pca_plot19509.utr, aes(x = PC1_mu, y = PC2_mu, color = as.factor(cohort)), size =4) +
+  #geom_point(alpha = 0.5) +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Cohorts")
+
+# By whether domestic or not
+pca_plot19509.utr %>%
+  ggplot(aes(x = PC1, y = PC2, color = as.factor(dom))) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Domestic vs Feral")
+
+# By depth
+pca_plot19509.utr %>%
+  ggplot(aes(x = PC1, y = PC2, color = DP19509.utr_med)) +
+  geom_point() +
+  theme(aspect.ratio = 1) +
+  xlab(glue("PC1 ({var_df19509.utr[1,2]})")) +
+  ylab(glue("PC2 ({var_df19509.utr[2,2]})")) +
+  ggtitle("ENSGALG00000019509.utr: Median Sample Depth")
+```
+
+
+# Session Info
+```{r Sesh}
+warnings()
+session_info()
+```
+
+`r knitr::knit_exit()`

@@ -1,0 +1,3517 @@
+---
+title: | 
+ | Quantification of SNP Allelic Differences (Bermuda vs Domestic): 
+ | 2-Sided Wilcoxon T-tests
+author: "Alec Steep"
+date: "02/14/2022"
+always_allow_html: true
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+    highlight: zenburn
+    css: ../style/style.css
+---
+
+# CONFIGURATIONS
+```{r setup, message=FALSE, results='hide', warning = FALSE, echo = TRUE}
+# Set the working directory and tool paths on your local computer.
+WD <- "/Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep" 
+# Set the gsutil path
+
+knitr::opts_knit$set(root.dir=WD)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+```
+
+##### CSS Top Styling
+```{r CSS Top Styling}
+write_css = FALSE
+if(write_css){
+  writeLines("td, th { padding : 3px } th { background-color:white; color:black; border:1px solid black; text-align:center } td {color:black; border:1px solid black; word-wrap:break-word; white-space:nowrap; overflow: hidden; text-overflow: ellipsis; max-width:300px; text-align:left}", con=file.path(normalizePath(WD), "style/style.css"))
+}
+```
+
+# Goals of Analysis
+- Quantification of SNP allelic Ddfferences (Bermuda vs Domestic)
+- Compare SNP position and VEP annotation with allelic differences
+- Discover General Themes (Genes/Variant Function/Mutational Frequency) within selective sweep regions
+
+# Takeaways
+- SNP data support predicted selective sweep regions
+- Some selective sweep regions demonstrate simultaneous
+  - differences in allele frequencies between (Bermuda and Domestic), and
+  - strong correlation between position and allele frequency
+- Nearly all potential “driver” mutations within selective sweep regions reside in non-coding regulatory regions
+
+# Prepare Environment & Load Data
+
+## Setup the Environment
+```{r Setup the Environment, message=FALSE, results='hide', warning = FALSE, echo = TRUE}
+################################################################################
+##### Resources and Dependencies ###############################################
+################################################################################
+# Whether to knit document and display data
+knit_time = TRUE
+save_bool = FALSE
+
+#BiocManager::install("ensemblVEP")
+
+# Load dependencies
+pacs...man <- c("tidyverse","kableExtra","devtools","glue","lubridate","gt",
+                "rtracklayer","glue","impute","multtest","liftOver")
+for(pac in pacs...man){
+  suppressWarnings(suppressPackageStartupMessages(library(pac, character.only = TRUE)))
+}
+
+#browseVignettes("ensemblVEP")
+############################################################
+##### Functions ############################################
+############################################################
+
+# Name functions
+select <- dplyr::select
+map <- purrr::map
+desc <- dplyr::desc
+arrange <- dplyr::arrange
+melt <- reshape2::melt
+mutate <- dplyr::mutate
+glue <- glue::glue
+
+# Global options
+options(dplyr.print_max = 100)
+options(scipen=10000)
+
+# Colors
+redblue100<-rgb(read.table(paste0(WD,'/colors/redblue100.txt'),sep='\t',row.names=1,header=T))
+```
+
+## Source functions
+```{r}
+source(glue("{WD}/functions/20220214_LoadVepVcf.R"))
+```
+
+### Source of Germline Variant Calls
+Germline variants were received from Maria Luisa Martin Cerezo (Marisa) and Dominic Wright on February 14, 2022.
+
+### Source of Annotation Files
+- GalGal4 Reference Genome File
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal4/bigZips/
+- GalGal5 Reference Genome File and dictionary
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal5/bigZips/
+- Gg4 to Gg5 chain file
+  - https://hgdownload.soe.ucsc.edu/goldenPath/galGal4/liftOver/
+
+# Docker Specific Analyses (performed outside of R)
+
+###  Perform a LiftOver of the g.vcf files via picard
+
+#### Pull the image if neccessary
+docker pull broadinstitute/gatk:latest
+
+docker needs permission to bind to directory on mac, see link: https://docs.docker.com/desktop/mac/
+
+#### start up the GATK container with the working directory mounted in
+docker run -v /Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep/data:/gatk/bermuda_data -it broadinstitute/gatk:latest
+gatk CreateSequenceDictionary -R ./bermuda_data/galGal5.fa -O ./bermuda_data/galGal5.dict
+https://www.biostars.org/p/46331/
+
+#### Index the file to extract certain regions
+gatk IndexFeatureFile \
+--input ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps.vcf
+
+#### Select variants over selective sweep regions
+gatk SelectVariants \
+--variant ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps.vcf \
+--output ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_sweeps.vcf \
+--intervals chr1:150,340,000-150,420,000 \
+--intervals chr2:94,120,000-94,220,000 \
+--intervals chr2:123,740,000-123,800,000 \
+--intervals chr2:142,940,000-143,220,000 \
+--intervals chr3:52,840,000-52,900,000 \
+--intervals chr3:92,900,000-92,960,000 \
+--intervals chr5:3,700,000-3,960,000 \
+--intervals chr7:19,320,000-19,380,000
+
+### Liftover the GG4 VCF calls to GG5
+
+picard script was adjusted to allow for 40g RAM if neccessary
+Command takes 1 hr to run
+gatk LiftoverVcf \
+--java-options "-Xmx40G" \
+-I ./bermuda_data/bermuda_old_kauai_publicseq_filtered_snps_sweeps.vcf \
+-O ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-sweeps_steep.vcf \
+--CHAIN ./bermuda_data/galGal4ToGalGal5.over.chain \
+--REJECT ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-rejects-sweeps_steep.vcf \
+-R ./bermuda_data/galGal5.fa
+
+### Seperate samples via GATK (docker image)
+The Genome Analysis Toolkit (GATK) v4.2.5.0
+HTSJDK Version: 2.24.1
+Picard Version: 2.25.4
+
+samples=("DRS042875" "DRS042876" "DRS042877" "DRS042878" "DRS042879" "P4806_126" "P4806_128" "P4806_131" "P4806_132" "P4806_133" "P4806_134" "P4806_135" "P4806_136" "P4806_137" "P4806_139" "P4806_140" "P4806_141" "P4806_142" "P4806_143" "P4806_144" "P4806_157" "P4806_158" "P4806_159" "P4806_160" "P4806_161" "P4806_162" "SRP022583" "SRS1014597" "SRS1014598" "SRS1014599" "SRS1014600" "SRS1014601" "SRS1014602" "SRS1014603" "SRS1014604" "SRS1014605" "SRS1275748" "SRS1275749" "SRS1275750" "SRS1275751" "SRS1275752" "SRS1275753" "SRS1275754" "SRS1275755" "SRS426963" "SRS524482" "SRS524483" "SRS524484" "SRS524485" "SRS524486" "SRS524487" "SRS524488" "SRS524489" "SRS589235" "SRS589236" "SRS589237" "SRS589238" "SRS589239" "SRS589240" "SRS589241" "SRS589242" "SRS589243" "SRS589244" "SRS589245" "SRS589246" "SRS589247" "SRS589248" "SRS589249" "SRS589250" "SRS589251" "SRS589252" "SRS589253" "SRS589254" "SRS589255" "SRS589256" "SRS589257" "SRS589258" "SRS589259" "SRS589260" "SRS589261" "SRS589262" "SRS589263" "SRS589265" "SRS589266" "SRS810965" "SRS811020" "SRS811021" "SRS811022" "SRS811023" "SRS811024" "SRS811025" "SRS811026" "SRS811027" "ugc_586_1" "ugc_586_10" "ugc_586_11" "ugc_586_12" "ugc_586_13" "ugc_586_14" "ugc_586_15" "ugc_586_16" "ugc_586_17" "ugc_586_18" "ugc_586_19" "ugc_586_2" "ugc_586_20" "ugc_586_21" "ugc_586_22" "ugc_586_23" "ugc_586_25" "ugc_586_3" "ugc_586_4" "ugc_586_5" "ugc_586_6" "ugc_586_7" "ugc_586_8" "ugc_586_9")
+
+for sample in ${samples[@]}; do
+echo ${sample};
+gatk SelectVariants \
+--variant ./bermuda_data/20220214_bermuda-kauai-public-filtered-gg5-snps-liftover-sweeps_steep.vcf \
+--output ./bermuda_data/20220214_${sample}-gg5-snps-sweeps_steep.vcf \
+--sample-name ${sample}
+done
+
+#### Exit the docker image
+exit
+
+### Annotate SNPs with VEP annotations
+
+#### Pull the docker image for vep for galgal5
+docker pull steepale/vep_galgal5:release_92.1
+#### Interactively run the image
+docker run -v /Users/Alec/Documents/bermuda/20220214_vcf-annotation_steep/data:/opt/vep/src/ensembl-vep/bermuda_data -it steepale/vep_galgal5:release_92.1
+
+#### List the samples to be annotated (in future, just annotate one sample, all sample share all variants in seperated VCF format)
+samples=("DRS042875" "DRS042876" "DRS042877" "DRS042878" "DRS042879" "P4806_126" "P4806_128" "P4806_131" "P4806_132" "P4806_133" "P4806_134" "P4806_135" "P4806_136" "P4806_137" "P4806_139" "P4806_140" "P4806_141" "P4806_142" "P4806_143" "P4806_144" "P4806_157" "P4806_158" "P4806_159" "P4806_160" "P4806_161" "P4806_162" "SRP022583" "SRS1014597" "SRS1014598" "SRS1014599" "SRS1014600" "SRS1014601" "SRS1014602" "SRS1014603" "SRS1014604" "SRS1014605" "SRS1275748" "SRS1275749" "SRS1275750" "SRS1275751" "SRS1275752" "SRS1275753" "SRS1275754" "SRS1275755" "SRS426963" "SRS524482" "SRS524483" "SRS524484" "SRS524485" "SRS524486" "SRS524487" "SRS524488" "SRS524489" "SRS589235" "SRS589236" "SRS589237" "SRS589238" "SRS589239" "SRS589240" "SRS589241" "SRS589242" "SRS589243" "SRS589244" "SRS589245" "SRS589246" "SRS589247" "SRS589248" "SRS589249" "SRS589250" "SRS589251" "SRS589252" "SRS589253" "SRS589254" "SRS589255" "SRS589256" "SRS589257" "SRS589258" "SRS589259" "SRS589260" "SRS589261" "SRS589262" "SRS589263" "SRS589265" "SRS589266" "SRS810965" "SRS811020" "SRS811021" "SRS811022" "SRS811023" "SRS811024" "SRS811025" "SRS811026" "SRS811027" "ugc_586_1" "ugc_586_10" "ugc_586_11" "ugc_586_12" "ugc_586_13" "ugc_586_14" "ugc_586_15" "ugc_586_16" "ugc_586_17" "ugc_586_18" "ugc_586_19" "ugc_586_2" "ugc_586_20" "ugc_586_21" "ugc_586_22" "ugc_586_23" "ugc_586_25" "ugc_586_3" "ugc_586_4" "ugc_586_5" "ugc_586_6" "ugc_586_7" "ugc_586_8" "ugc_586_9")
+
+#### Annotate samples
+for sample in ${samples[@]}; do
+echo ${sample};
+vep \
+--fork 4 \
+-v \
+-i ./bermuda_data/20220214_${sample}-gg5-snps-sweeps_steep.vcf \
+-o ./bermuda_data/20220214_${sample}-gg5-snps-sweeps-vep_steep.vcf \
+--vcf \
+--cache \
+--species gallus_gallus \
+--force_overwrite \
+--sift b \
+--protein \
+--domains \
+--ccds \
+--uniprot \
+--tsl \
+--appris \
+--hgvs
+done
+
+#### Exit the Docker image
+exit
+
+# Load the annotated data back into R
+
+## Load in the vcf files
+Each file takes about 1 minute to load
+```{r}
+# Get a list of the samples to be loaded
+samples <- c("DRS042875", "DRS042876", "DRS042877", "DRS042878", "DRS042879", "P4806_126", "P4806_128", "P4806_131", "P4806_132", "P4806_133", "P4806_134", "P4806_135", "P4806_136", "P4806_137", "P4806_139", "P4806_140", "P4806_141", "P4806_142", "P4806_143", "P4806_144", "P4806_157", "P4806_158", "P4806_159", "P4806_160", "P4806_161", "P4806_162", "SRP022583", "SRS1014597", "SRS1014598", "SRS1014599", "SRS1014600", "SRS1014601", "SRS1014602", "SRS1014603", "SRS1014604", "SRS1014605", "SRS1275748", "SRS1275749", "SRS1275750", "SRS1275751", "SRS1275752", "SRS1275753", "SRS1275754", "SRS1275755", "SRS426963", "SRS524482", "SRS524483", "SRS524484", "SRS524485", "SRS524486", "SRS524487", "SRS524488", "SRS524489", "SRS589235", "SRS589236", "SRS589237", "SRS589238", "SRS589239", "SRS589240", "SRS589241", "SRS589242", "SRS589243", "SRS589244", "SRS589245", "SRS589246", "SRS589247", "SRS589248", "SRS589249", "SRS589250", "SRS589251", "SRS589252", "SRS589253", "SRS589254", "SRS589255", "SRS589256", "SRS589257", "SRS589258", "SRS589259", "SRS589260", "SRS589261", "SRS589262", "SRS589263", "SRS589265", "SRS589266", "SRS810965", "SRS811020", "SRS811021", "SRS811022", "SRS811023", "SRS811024", "SRS811025", "SRS811026", "SRS811027", "ugc_586_1", "ugc_586_10", "ugc_586_11", "ugc_586_12", "ugc_586_13", "ugc_586_14", "ugc_586_15", "ugc_586_16", "ugc_586_17", "ugc_586_18", "ugc_586_19", "ugc_586_2", "ugc_586_20", "ugc_586_21", "ugc_586_22", "ugc_586_23", "ugc_586_25", "ugc_586_3", "ugc_586_4", "ugc_586_5", "ugc_586_6", "ugc_586_7", "ugc_586_8", "ugc_586_9")
+
+load_bool1 <- FALSE
+
+if(load_bool1){
+  i <- 1
+  # Load the vep annotated vcf files
+  for(i in 1:length(samples)){
+    print(samples[i])
+    gg5_vcf_vep <- glue("{WD}/data/20220214_{samples[i]}-gg5-snps-sweeps-vep_steep.vcf")
+    eval(call("<-", as.name(glue("{samples[i]}_df")), LoadVepVcf(vcf_file = gg5_vcf_vep)))
+  }
+
+  # Combine all the data
+  all_df1 <- rbind(DRS042875_df, DRS042876_df, DRS042877_df, DRS042878_df, DRS042879_df, P4806_126_df, P4806_128_df, P4806_131_df, P4806_132_df, P4806_133_df, P4806_134_df, P4806_135_df, P4806_136_df, P4806_137_df, P4806_139_df, P4806_140_df, P4806_141_df, P4806_142_df, P4806_143_df, P4806_144_df, P4806_157_df, P4806_158_df, P4806_159_df, P4806_160_df, P4806_161_df, P4806_162_df, SRP022583_df, SRS1014597_df, SRS1014598_df, SRS1014599_df, SRS1014600_df, SRS1014601_df, SRS1014602_df, SRS1014603_df, SRS1014604_df, SRS1014605_df, SRS1275748_df, SRS1275749_df, SRS1275750_df, SRS1275751_df, SRS1275752_df, SRS1275753_df, SRS1275754_df, SRS1275755_df, SRS426963_df, SRS524482_df, SRS524483_df, SRS524484_df, SRS524485_df, SRS524486_df, SRS524487_df, SRS524488_df, SRS524489_df, SRS589235_df, SRS589236_df, SRS589237_df, SRS589238_df, SRS589239_df, SRS589240_df, SRS589241_df, SRS589242_df, SRS589243_df, SRS589244_df, SRS589245_df, SRS589246_df, SRS589247_df, SRS589248_df, SRS589249_df, SRS589250_df, SRS589251_df, SRS589252_df, SRS589253_df, SRS589254_df, SRS589255_df, SRS589256_df, SRS589257_df, SRS589258_df, SRS589259_df, SRS589260_df, SRS589261_df, SRS589262_df, SRS589263_df, SRS589265_df, SRS589266_df, SRS810965_df, SRS811020_df, SRS811021_df, SRS811022_df, SRS811023_df, SRS811024_df, SRS811025_df, SRS811026_df, SRS811027_df, ugc_586_1_df, ugc_586_10_df, ugc_586_11_df, ugc_586_12_df, ugc_586_13_df, ugc_586_14_df, ugc_586_15_df, ugc_586_16_df, ugc_586_17_df, ugc_586_18_df, ugc_586_19_df, ugc_586_2_df, ugc_586_20_df, ugc_586_21_df, ugc_586_22_df, ugc_586_23_df, ugc_586_25_df, ugc_586_3_df, ugc_586_4_df, ugc_586_5_df, ugc_586_6_df, ugc_586_7_df, ugc_586_8_df, ugc_586_9_df)
+  
+  # Cleanup
+  rm(DRS042875_df, DRS042876_df, DRS042877_df, DRS042878_df, DRS042879_df, P4806_126_df, P4806_128_df, P4806_131_df, P4806_132_df, P4806_133_df, P4806_134_df, P4806_135_df, P4806_136_df, P4806_137_df, P4806_139_df, P4806_140_df, P4806_141_df, P4806_142_df, P4806_143_df, P4806_144_df, P4806_157_df, P4806_158_df, P4806_159_df, P4806_160_df, P4806_161_df, P4806_162_df, SRP022583_df, SRS1014597_df, SRS1014598_df, SRS1014599_df, SRS1014600_df, SRS1014601_df, SRS1014602_df, SRS1014603_df, SRS1014604_df, SRS1014605_df, SRS1275748_df, SRS1275749_df, SRS1275750_df, SRS1275751_df, SRS1275752_df, SRS1275753_df, SRS1275754_df, SRS1275755_df, SRS426963_df, SRS524482_df, SRS524483_df, SRS524484_df, SRS524485_df, SRS524486_df, SRS524487_df, SRS524488_df, SRS524489_df, SRS589235_df, SRS589236_df, SRS589237_df, SRS589238_df, SRS589239_df, SRS589240_df, SRS589241_df, SRS589242_df, SRS589243_df, SRS589244_df, SRS589245_df, SRS589246_df, SRS589247_df, SRS589248_df, SRS589249_df, SRS589250_df, SRS589251_df, SRS589252_df, SRS589253_df, SRS589254_df, SRS589255_df, SRS589256_df, SRS589257_df, SRS589258_df, SRS589259_df, SRS589260_df, SRS589261_df, SRS589262_df, SRS589263_df, SRS589265_df, SRS589266_df, SRS810965_df, SRS811020_df, SRS811021_df, SRS811022_df, SRS811023_df, SRS811024_df, SRS811025_df, SRS811026_df, SRS811027_df, ugc_586_1_df, ugc_586_10_df, ugc_586_11_df, ugc_586_12_df, ugc_586_13_df, ugc_586_14_df, ugc_586_15_df, ugc_586_16_df, ugc_586_17_df, ugc_586_18_df, ugc_586_19_df, ugc_586_2_df, ugc_586_20_df, ugc_586_21_df, ugc_586_22_df, ugc_586_23_df, ugc_586_25_df, ugc_586_3_df, ugc_586_4_df, ugc_586_5_df, ugc_586_6_df, ugc_586_7_df, ugc_586_8_df, ugc_586_9_df)
+}
+```
+
+## Add the sample cohort annotation
+Note: Supp annotation file likely has silent error of columns being accidently shuffled
+```{r}
+# Load the supplementary data file
+supp_file <- glue("{WD}/data/20220214_supp-table_steep.txt")
+supp_df <- read.table(file = supp_file, sep = '\t', header = TRUE, fill = TRUE)
+# Subset file
+supp_df <- supp_df %>%
+  select(sample_id_2, cohort, dom, abbreviation, pooled, description)
+
+# Filename
+all_file1 <- glue("{WD}/data/20220214_all-gg5-snps-sweeps-vep-v1.0_steep.vcf")
+save_bool1 <- FALSE
+if(save_bool1){
+  # Load the all_df1 file
+  # Join the supp data to genetic data
+  all_df1 <- left_join(x = all_df1, y = supp_df, by = c("sample" = "sample_id_2"))
+  # Save the file
+  saveRDS(all_df1, all_file1)
+}else{
+  # The file has already been adjusted and saved; therefore, just load it
+  all_df1 <- readRDS(all_file1)
+}
+```
+
+# Before Filtering SNPs, Examine the distribution of certain quality statistics for each run
+
+## Determine median depth in sweep region per sample
+blue line represents a median depth of 3
+```{r}
+names(all_df1)
+
+# Examine the median depth in a bar plot stratified by pooled and median depth per sample
+# One and zero are bollean for pooled or not
+all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  mutate(plot_name = ifelse(DP_med >=3, sample, '')) %>%
+  ggplot(aes(x = cohort, y = DP_med)) +
+  geom_abline(intercept=3, slope = 0, color = 'blue') +
+  geom_boxplot() +
+  geom_jitter(alpha = 0.5, height = 0, width = 0.1) +
+  facet_wrap(~pooled)
+
+all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  mutate(plot_name = ifelse(DP_med >=3, sample, '')) %>%
+  ggplot(aes(color = cohort, x = DP_med)) +
+  geom_density() +
+  facet_wrap(~pooled)
+
+# Determine samples to remove
+sam_rm <- all_df1 %>%
+  group_by(sample) %>%
+  mutate(DP_med = median(DP, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, DP_med, pooled) %>%
+  unique() %>%
+  filter(DP_med < 3) %>%
+  select(sample) %>% unlist() %>% as.character()
+sam_rm
+
+```
+
+## Remove samples (if neccssary, else done donwstream)
+```{r}
+rm_sam_bool1 <- FALSE
+if(rm_sam_bool1){
+  all_df2 <- all_df1 %>%
+    filter(!sample %in% sam_rm)
+}else{
+  all_df2 <- all_df1
+}
+```
+
+## DP
+Stratified by cohort and whether samples were pooled
+```{r}
+# Examine cohort depths
+all_df2 %>%
+  ggplot(aes(x=DP, color = cohort)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Hawaii depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'haw') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,20) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Bermuda depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'ber') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Domestic depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'dom') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled) +
+  theme(legend.position="none")
+```
+
+### Distribution of RJF depths
+```{r}
+all_df2 %>%
+  filter(cohort == 'rjf') %>%
+  ggplot(aes(x=DP, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+## GQ
+Stratified by cohort and whether samples were pooled
+Note: Genotype qualities for hawaii are considerably lower
+```{r}
+# Examine cohort depths
+all_df2 %>%
+  ggplot(aes(x=GQ, color = cohort)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Hawaii genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'haw') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,20) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Bermuda genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'ber') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+### Distribution of Domestic genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'dom') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled) +
+  theme(legend.position="none")
+```
+
+### Distribution of RJF genotype qualities
+```{r}
+all_df2 %>%
+  filter(cohort == 'rjf') %>%
+  ggplot(aes(x=GQ, color = sample)) + 
+  geom_density(adjust =3) +
+  xlim(0,50) +
+  facet_wrap(~pooled)
+```
+
+# Add Additional Annotations
+
+## Annotate SNPs with the following (AA, AB, BB, BC)
+```{r}
+all_df3 <- all_df2 %>%
+  group_by(CHROM, POS, REF, ALT) %>%
+  mutate(AA = ifelse(GT == './.', NA, 0)) %>%
+  mutate(AB = ifelse(GT == './.', NA, 0)) %>%
+  mutate(BB = ifelse(GT == './.', NA, 0)) %>%
+  mutate(BC = ifelse(GT == './.', NA, 0)) %>%
+  mutate(AA = ifelse(GT == '0/0', 1, AA)) %>%
+  mutate(AB = ifelse(GT %in% c('0/1','0/2','0/3'), 1, AB)) %>%
+  mutate(BB = ifelse(GT %in% c('1/1','2/2','3/3'), 1, BB)) %>%
+  mutate(BC = ifelse(GT %in% c('1/2'), 1, BC)) %>%
+  ungroup()
+```
+
+### Filter legit calls; limited by data from Hawaii
+```{r}
+# all_df4 <- all_df3 %>%
+#   filter(GT != './.') %>%
+#   filter(DP >= 3)
+```
+
+## Liftover data from GG5 back to GG4 and add annotation
+```{r}
+
+# Chain file for liftover
+######################
+# Install a chain file for liftover
+# Chain format: https://genome.ucsc.edu/goldenpath/help/chain.html
+# Liftover file downloaded (20220414) from: https://hgdownload.soe.ucsc.edu/goldenPath/galGal5/liftOver/
+
+
+################################################################################
+#####     Perform Liftover      ################################################
+################################################################################
+
+# Add a position-specific index
+all_df3 <- all_df3 %>%
+  arrange(CHROM,POS) %>%
+  group_by(CHROM, POS) %>%
+  mutate(pos_index = cur_group_id()) %>%
+  ungroup() %>%
+  arrange(pos_index) %>%
+  select(pos_index, names(all_df3))
+
+# Load the data into a GRanges object
+names(all_df3)[53] <- "vep_strand"
+all_gr3.1 <- makeGRangesFromDataFrame(all_df3,
+                         keep.extra.columns = TRUE,
+                         ignore.strand=TRUE,
+                         seqnames.field='CHROM',
+                         start.field = 'POS',
+                         end.field = 'POS')
+
+# Add 'chr' to CHROM names
+seqlevelsStyle(all_gr3.1) = "UCSC"
+
+# Import the Chain file
+GG5to4_chain <- import.chain(glue("{WD}/data/galGal5ToGalGal4.over.chain"))
+
+# Perform liftover (time)
+all_gr3.2 <- liftOver(all_gr3.1, GG5to4_chain)
+all_gr3.2 <- unlist(all_gr3.2)
+# Convert to tibble
+all_df3.2 <- as_tibble(all_gr3.2)
+# Drop old REF columns
+all_df3.2 <- all_df3.2 %>% dplyr::select(-end, -strand, -width)
+
+# Adjust names
+names(all_df3.2)[1:2] <- c('CHROM_gg4','POS_gg4')
+all_df3.2 <- all_df3.2 %>% select(pos_index, CHROM_gg4, POS_gg4) %>% unique()
+# Join information back into all_df3
+all_df3 <- left_join(x = all_df3, y = all_df3.2, by = c("pos_index"))
+all_df3 <- all_df3  %>%
+  select(sample, CHROM, POS, CHROM_gg4, POS_gg4, names(all_df3)[!names(all_df3) %in% c("sample", "CHROM", "POS", "CHROM_gg4", "POS_gg4")])
+
+# Remove memory object
+rm(GG5to4_chain)
+```
+
+## Convert tidy dataframe to numeric matrix
+AA=0, AB=1, BB=2, BC=3
+```{r}
+all_df5 <- all_df3 %>%
+  mutate(CHROM = as.integer(str_remove_all(as.character(CHROM), 'chr' ))) %>%
+  mutate(SNP_VAL = case_when(AA == 1 ~ 0,
+                             AB == 1 ~ 1,
+                             BB == 1 ~ 2,
+                             BC == 1 ~ 3)) %>%
+  select(sample, CHROM, POS, SNP_VAL,cohort) %>%
+  unique()
+
+# Bermuda; chr 1
+ber1.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 2
+ber2.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 3
+ber3.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 5
+ber5.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Bermuda; chr 7
+ber7.1 <- all_df5 %>%
+  filter(cohort == 'ber') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# domestic; chr 1
+dom1.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 2
+dom2.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 3
+dom3.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 5
+dom5.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# domestic; chr 7
+dom7.1 <- all_df5 %>%
+  filter(cohort == 'dom') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Red Jungelfowl; chr 1
+rjf1.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 2
+rjf2.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 3
+rjf3.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 5
+rjf5.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Red Jungelfowl; chr 7
+rjf7.1 <- all_df5 %>%
+  filter(cohort == 'rjf') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+
+# Hawaii; chr 1
+haw1.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 1) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 2
+haw2.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 2) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 3
+haw3.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 3) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 5
+haw5.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 5) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+# Hawaii; chr 7
+haw7.1 <- all_df5 %>%
+  filter(cohort == 'haw') %>%
+  filter(CHROM == 7) %>%
+  select(-cohort, -CHROM) %>%
+  pivot_wider(names_from = POS, values_from = SNP_VAL) %>%
+  column_to_rownames(var = 'sample') %>% as.matrix()
+```
+
+### Print Dimensions (round 1)
+```{r}
+print("Order: ber, dom, rjf, haw")
+print('Chromosome 1')
+dim(ber1.1)
+dim(dom1.1)
+dim(rjf1.1)
+dim(haw1.1)
+print('Chromosome 2')
+dim(ber2.1)
+dim(dom2.1)
+dim(rjf2.1)
+dim(haw2.1)
+print('Chromosome 3')
+dim(ber3.1)
+dim(dom3.1)
+dim(rjf3.1)
+dim(haw3.1)
+print('Chromosome 5')
+dim(ber5.1)
+dim(dom5.1)
+dim(rjf5.1)
+dim(haw5.1)
+print('Chromosome 7')
+dim(ber7.1)
+dim(dom7.1)
+dim(rjf7.1)
+dim(haw7.1)
+
+```
+
+### Save the data in an .RData File
+```{r}
+if(save_bool){
+  save(ber1.1, dom1.1, rjf1.1, haw1.1,
+     ber2.1, dom2.1, rjf2.1, haw2.1,
+     ber3.1, dom3.1, rjf3.1, haw3.1,
+     ber5.1, dom5.1, rjf5.1, haw5.1,
+     ber7.1, dom7.1, rjf7.1, haw7.1,
+     file = glue("{WD}/data/20220214_cohort-matrices.RData"))
+}
+```
+
+IMPORTANT: This analysis will not consider hawaii birds because they were not used to detect selective sweep regions
+
+# Perform Initial QC
+
+## Negative/Missing Values (by Feature)
+
+### Rule out negative values
+```{r}
+# Chrome 1
+min(ber1.1,na.rm=T)
+min(dom1.1,na.rm=T)
+min(rjf1.1,na.rm=T)
+# Chrome 2
+min(ber2.1,na.rm=T)
+min(dom2.1,na.rm=T)
+min(rjf2.1,na.rm=T)
+# Chrome 3
+min(ber3.1,na.rm=T)
+min(dom3.1,na.rm=T)
+min(rjf3.1,na.rm=T)
+# Chrome 5
+min(ber5.1,na.rm=T)
+min(dom5.1,na.rm=T)
+min(rjf5.1,na.rm=T)
+# Chrome 7
+min(ber7.1,na.rm=T)
+min(dom7.1,na.rm=T)
+min(rjf7.1,na.rm=T)
+
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 1)
+```{r}
+# ber
+ber1.1.f.c0<-apply(ber1.1,2,function(x) sum(is.na(x))) 
+plot(ber1.1.f.c0, ylim = c(0,dim(ber1.1)[1]), main = 'ber; chr1'); abline(h = 5, col = 'blue')
+
+# dom
+dom1.1.f.c0<-apply(dom1.1,2,function(x) sum(is.na(x))) 
+plot(dom1.1.f.c0, ylim = c(0,dim(dom1.1)[1]), main = 'dom; chr1'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf1.1.f.c0<-apply(rjf1.1,2,function(x) sum(is.na(x))) 
+plot(rjf1.1.f.c0, ylim = c(0,dim(rjf1.1)[1]), main = 'rjf; chr1'); abline(h = 3, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 1)
+```{r}
+# ber; chr1
+rm_n <- sum(ber1.1.f.c0>=5)
+ber1.1 <- ber1.1[,ber1.1.f.c0<5]
+print(glue("Features removed from ber;chr1: {rm_n}"))
+dim(ber1.1)
+
+# dom; chr1
+rm_n <- sum(dom1.1.f.c0>=10)
+dom1.1 <- dom1.1[,dom1.1.f.c0<10]
+print(glue("Features removed from dom;chr1: {rm_n}"))
+dim(dom1.1)
+
+# rjf; chr1
+rm_n <- sum(rjf1.1.f.c0>=3)
+rjf1.1 <- rjf1.1[,rjf1.1.f.c0<3]
+print(glue("Features removed from rjf;chr1: {rm_n}"))
+dim(rjf1.1)
+
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 2)
+```{r}
+# ber
+ber2.1.f.c0<-apply(ber2.1,2,function(x) sum(is.na(x))) 
+plot(ber2.1.f.c0, ylim = c(0,dim(ber2.1)[1]), main = 'ber; chr2'); abline(h = 5, col = 'blue')
+
+# dom
+dom2.1.f.c0<-apply(dom2.1,2,function(x) sum(is.na(x))) 
+plot(dom2.1.f.c0, ylim = c(0,dim(dom2.1)[1]), main = 'dom; chr2'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf2.1.f.c0<-apply(rjf2.1,2,function(x) sum(is.na(x))) 
+plot(rjf2.1.f.c0, ylim = c(0,dim(rjf2.1)[1]), main = 'rjf; chr2'); abline(h = 3, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 2)
+```{r}
+# ber; chr2
+rm_n <- sum(ber2.1.f.c0>=5)
+ber2.1 <- ber2.1[,ber2.1.f.c0<5]
+print(glue("Features removed from ber;chr2: {rm_n}"))
+dim(ber2.1)
+
+# dom; chr2
+rm_n <- sum(dom2.1.f.c0>=10)
+dom2.1 <- dom2.1[,dom2.1.f.c0<10]
+print(glue("Features removed from dom;chr2: {rm_n}"))
+dim(dom2.1)
+
+# rjf; chr2
+rm_n <- sum(rjf2.1.f.c0>=3)
+rjf2.1 <- rjf2.1[,rjf2.1.f.c0<3]
+print(glue("Features removed from rjf;chr2: {rm_n}"))
+dim(rjf2.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 3)
+```{r}
+# ber
+ber3.1.f.c0<-apply(ber3.1,2,function(x) sum(is.na(x))) 
+plot(ber3.1.f.c0, ylim = c(0,dim(ber3.1)[1]), main = 'ber; chr3'); abline(h = 5, col = 'blue')
+
+# dom
+dom3.1.f.c0<-apply(dom3.1,2,function(x) sum(is.na(x))) 
+plot(dom3.1.f.c0, ylim = c(0,dim(dom3.1)[1]), main = 'dom; chr3'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf3.1.f.c0<-apply(rjf3.1,2,function(x) sum(is.na(x))) 
+plot(rjf3.1.f.c0, ylim = c(0,dim(rjf3.1)[1]), main = 'rjf; chr3'); abline(h = 3, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 3)
+```{r}
+# ber; chr3
+rm_n <- sum(ber3.1.f.c0>=5)
+ber3.1 <- ber3.1[,ber3.1.f.c0<5]
+print(glue("Features removed from ber;chr3: {rm_n}"))
+dim(ber3.1)
+
+# dom; chr3
+rm_n <- sum(dom3.1.f.c0>=10)
+dom3.1 <- dom3.1[,dom3.1.f.c0<10]
+print(glue("Features removed from dom;chr3: {rm_n}"))
+dim(dom3.1)
+
+# rjf; chr3
+rm_n <- sum(rjf3.1.f.c0>=3)
+rjf3.1 <- rjf3.1[,rjf3.1.f.c0<3]
+print(glue("Features removed from rjf;chr3: {rm_n}"))
+dim(rjf3.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 5)
+```{r}
+# ber
+ber5.1.f.c0<-apply(ber5.1,2,function(x) sum(is.na(x))) 
+plot(ber5.1.f.c0, ylim = c(0,dim(ber5.1)[1]), main = 'ber; chr5'); abline(h = 5, col = 'blue')
+
+# dom
+dom5.1.f.c0<-apply(dom5.1,2,function(x) sum(is.na(x))) 
+plot(dom5.1.f.c0, ylim = c(0,dim(dom5.1)[1]), main = 'dom; chr5'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf5.1.f.c0<-apply(rjf5.1,2,function(x) sum(is.na(x))) 
+plot(rjf5.1.f.c0, ylim = c(0,dim(rjf5.1)[1]), main = 'rjf; chr5'); abline(h = 3, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 5)
+```{r}
+# ber; chr5
+rm_n <- sum(ber5.1.f.c0>=5)
+ber5.1 <- ber5.1[,ber5.1.f.c0<5]
+print(glue("Features removed from ber;chr5: {rm_n}"))
+dim(ber5.1)
+
+# dom; chr5
+rm_n <- sum(dom5.1.f.c0>=10)
+dom5.1 <- dom5.1[,dom5.1.f.c0<10]
+print(glue("Features removed from dom;chr5: {rm_n}"))
+dim(dom5.1)
+
+# rjf; chr5
+rm_n <- sum(rjf5.1.f.c0>=3)
+rjf5.1 <- rjf5.1[,rjf5.1.f.c0<3]
+print(glue("Features removed from rjf;chr5: {rm_n}"))
+dim(rjf5.1)
+```
+
+### Examine the Distribution of Missing values in Features (Chrome 7)
+```{r}
+# ber
+ber7.1.f.c0<-apply(ber7.1,2,function(x) sum(is.na(x))) 
+plot(ber7.1.f.c0, ylim = c(0,dim(ber7.1)[1]), main = 'ber; chr7'); abline(h = 5, col = 'blue')
+
+# dom
+dom7.1.f.c0<-apply(dom7.1,2,function(x) sum(is.na(x))) 
+plot(dom7.1.f.c0, ylim = c(0,dim(dom7.1)[1]), main = 'dom; chr7'); abline(h = 10, col = 'blue')
+
+# rjf
+rjf7.1.f.c0<-apply(rjf7.1,2,function(x) sum(is.na(x))) 
+plot(rjf7.1.f.c0, ylim = c(0,dim(rjf7.1)[1]), main = 'rjf; chr7'); abline(h = 3, col = 'blue')
+```
+
+### Remove Features with High Missing Values (Chrom 7)
+```{r}
+# ber; chr7
+rm_n <- sum(ber7.1.f.c0>=5)
+ber7.1 <- ber7.1[,ber7.1.f.c0<5]
+print(glue("Features removed from ber;chr7: {rm_n}"))
+dim(ber7.1)
+
+# dom; chr7
+rm_n <- sum(dom7.1.f.c0>=10)
+dom7.1 <- dom7.1[,dom7.1.f.c0<10]
+print(glue("Features removed from dom;chr7: {rm_n}"))
+dim(dom7.1)
+
+# rjf; chr7
+rm_n <- sum(rjf7.1.f.c0>=3)
+rjf7.1 <- rjf7.1[,rjf7.1.f.c0<3]
+print(glue("Features removed from rjf;chr7: {rm_n}"))
+dim(rjf7.1)
+```
+
+## Missing Values (by Sample)
+Note: We want to make sure that we remove the same samples from each Chromosome, but we will examine the missingness stratified across all chromosomes before making the final decision
+
+### Examine the Distribution of Missing values in Samples (Chrome 1)
+```{r}
+# ber
+ber1.1.s.c0<-apply(ber1.1,1,function(x) sum(is.na(x))) 
+plot(ber1.1.s.c0, ylim = c(0,dim(ber1.1)[2]), main = 'ber; chr1'); abline(h = dim(ber1.1)[2]/10, col = 'blue')
+
+# dom
+dom1.1.s.c0<-apply(dom1.1,1,function(x) sum(is.na(x))) 
+plot(dom1.1.s.c0, ylim = c(0,dim(dom1.1)[2]), main = 'dom; chr1'); abline(h = dim(dom1.1)[2]/10, col = 'blue')
+
+# rjf
+rjf1.1.s.c0<-apply(rjf1.1,1,function(x) sum(is.na(x))) 
+plot(rjf1.1.s.c0, ylim = c(0,dim(rjf1.1)[2]), main = 'rjf; chr1'); abline(h = dim(rjf1.1)[2]/10, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 1)
+```{r}
+# ber; chr1
+rm_n <- sum(ber1.1.s.c0>=dim(ber1.1)[2]/10)
+rm_names <- names(ber1.1.s.c0)[!ber1.1.s.c0<dim(ber1.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber1.1 <- ber1.1[ber1.1.s.c0<dim(ber1.1)[2]/10, ]
+print(glue("Samples removed from ber_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber1.1)
+
+# dom; chr1
+rm_n <- sum(dom1.1.s.c0>=dim(dom1.1)[2]/10)
+rm_names <- names(dom1.1.s.c0)[!dom1.1.s.c0<dim(dom1.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom1.1 <- dom1.1[dom1.1.s.c0<dim(dom1.1)[2]/10, ]
+print(glue("Samples removed from dom_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom1.1)
+
+# rjf; chr1
+rm_n <- sum(rjf1.1.s.c0>=dim(rjf1.1)[2]/10)
+rm_names <- names(rjf1.1.s.c0)[!rjf1.1.s.c0<dim(rjf1.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf1.1 <- rjf1.1[rjf1.1.s.c0<dim(rjf1.1)[2]/10, ]
+print(glue("Samples removed from rjf_chr1: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf1.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 2)
+```{r}
+# ber
+ber2.1.s.c0<-apply(ber2.1,1,function(x) sum(is.na(x))) 
+plot(ber2.1.s.c0, ylim = c(0,dim(ber2.1)[2]), main = 'ber; chr2'); abline(h = dim(ber2.1)[2]/10, col = 'blue')
+
+# dom
+dom2.1.s.c0<-apply(dom2.1,1,function(x) sum(is.na(x))) 
+plot(dom2.1.s.c0, ylim = c(0,dim(dom2.1)[2]), main = 'dom; chr2'); abline(h = dim(dom2.1)[2]/10, col = 'blue')
+
+# rjf
+rjf2.1.s.c0<-apply(rjf2.1,1,function(x) sum(is.na(x))) 
+plot(rjf2.1.s.c0, ylim = c(0,dim(rjf2.1)[2]), main = 'rjf; chr2'); abline(h = dim(rjf2.1)[2]/10, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 2)
+```{r}
+# ber; chr2
+rm_n <- sum(ber2.1.s.c0>=dim(ber2.1)[2]/10)
+rm_names <- names(ber2.1.s.c0)[!ber2.1.s.c0<dim(ber2.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber2.1 <- ber2.1[ber2.1.s.c0<dim(ber2.1)[2]/10, ]
+print(glue("Samples removed from ber_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber2.1)
+
+# dom; chr2
+rm_n <- sum(dom2.1.s.c0>=dim(dom2.1)[2]/10)
+rm_names <- names(dom2.1.s.c0)[!dom2.1.s.c0<dim(dom2.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom2.1 <- dom2.1[dom2.1.s.c0<dim(dom2.1)[2]/10, ]
+print(glue("Samples removed from dom_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom2.1)
+
+# rjf; chr2
+rm_n <- sum(rjf2.1.s.c0>=dim(rjf2.1)[2]/10)
+rm_names <- names(rjf2.1.s.c0)[!rjf2.1.s.c0<dim(rjf2.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf2.1 <- rjf2.1[rjf2.1.s.c0<dim(rjf2.1)[2]/10, ]
+print(glue("Samples removed from rjf_chr2: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf2.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 3)
+```{r}
+# ber
+ber3.1.s.c0<-apply(ber3.1,1,function(x) sum(is.na(x))) 
+plot(ber3.1.s.c0, ylim = c(0,dim(ber3.1)[2]), main = 'ber; chr3'); abline(h = dim(ber3.1)[2]/10, col = 'blue')
+
+# dom
+dom3.1.s.c0<-apply(dom3.1,1,function(x) sum(is.na(x))) 
+plot(dom3.1.s.c0, ylim = c(0,dim(dom3.1)[2]), main = 'dom; chr3'); abline(h = dim(dom3.1)[2]/10, col = 'blue')
+
+# rjf
+rjf3.1.s.c0<-apply(rjf3.1,1,function(x) sum(is.na(x))) 
+plot(rjf3.1.s.c0, ylim = c(0,dim(rjf3.1)[2]), main = 'rjf; chr3'); abline(h = dim(rjf3.1)[2]/10, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 3)
+```{r}
+# ber; chr3
+rm_n <- sum(ber3.1.s.c0>=dim(ber3.1)[2]/10)
+rm_names <- names(ber3.1.s.c0)[!ber3.1.s.c0<dim(ber3.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber3.1 <- ber3.1[ber3.1.s.c0<dim(ber3.1)[2]/10, ]
+print(glue("Samples removed from ber_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber3.1)
+
+# dom; chr3
+rm_n <- sum(dom3.1.s.c0>=dim(dom3.1)[2]/10)
+rm_names <- names(dom3.1.s.c0)[!dom3.1.s.c0<dim(dom3.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom3.1 <- dom3.1[dom3.1.s.c0<dim(dom3.1)[2]/10, ]
+print(glue("Samples removed from dom_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom3.1)
+
+# rjf; chr3
+rm_n <- sum(rjf3.1.s.c0>=dim(rjf3.1)[2]/10)
+rm_names <- names(rjf3.1.s.c0)[!rjf3.1.s.c0<dim(rjf3.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf3.1 <- rjf3.1[rjf3.1.s.c0<dim(rjf3.1)[2]/10, ]
+print(glue("Samples removed from rjf_chr3: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf3.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 5)
+```{r}
+# ber
+ber5.1.s.c0<-apply(ber5.1,1,function(x) sum(is.na(x))) 
+plot(ber5.1.s.c0, ylim = c(0,dim(ber5.1)[2]), main = 'ber; chr5'); abline(h = dim(ber5.1)[2]/10, col = 'blue')
+
+# dom
+dom5.1.s.c0<-apply(dom5.1,1,function(x) sum(is.na(x))) 
+plot(dom5.1.s.c0, ylim = c(0,dim(dom5.1)[2]), main = 'dom; chr5'); abline(h = dim(dom5.1)[2]/10, col = 'blue')
+
+# rjf
+rjf5.1.s.c0<-apply(rjf5.1,1,function(x) sum(is.na(x))) 
+plot(rjf5.1.s.c0, ylim = c(0,dim(rjf5.1)[2]), main = 'rjf; chr5'); abline(h = dim(rjf5.1)[2]/10, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 5)
+```{r}
+# ber; chr5
+rm_n <- sum(ber5.1.s.c0>=dim(ber5.1)[2]/10)
+rm_names <- names(ber5.1.s.c0)[!ber5.1.s.c0<dim(ber5.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber5.1 <- ber5.1[ber5.1.s.c0<dim(ber5.1)[2]/10, ]
+print(glue("Samples removed from ber_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber5.1)
+
+# dom; chr5
+rm_n <- sum(dom5.1.s.c0>=dim(dom5.1)[2]/10)
+rm_names <- names(dom5.1.s.c0)[!dom5.1.s.c0<dim(dom5.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom5.1 <- dom5.1[dom5.1.s.c0<dim(dom5.1)[2]/10, ]
+print(glue("Samples removed from dom_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom5.1)
+
+# rjf; chr5
+rm_n <- sum(rjf5.1.s.c0>=dim(rjf5.1)[2]/10)
+rm_names <- names(rjf5.1.s.c0)[!rjf5.1.s.c0<dim(rjf5.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf5.1 <- rjf5.1[rjf5.1.s.c0<dim(rjf5.1)[2]/10, ]
+print(glue("Samples removed from rjf_chr5: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf5.1)
+```
+
+### Examine the Distribution of Missing values in Samples (Chrom 7)
+```{r}
+# ber
+ber7.1.s.c0<-apply(ber7.1,1,function(x) sum(is.na(x))) 
+plot(ber7.1.s.c0, ylim = c(0,dim(ber7.1)[2]), main = 'ber; chr7'); abline(h = dim(ber7.1)[2]/10, col = 'blue')
+
+# dom
+dom7.1.s.c0<-apply(dom7.1,1,function(x) sum(is.na(x))) 
+plot(dom7.1.s.c0, ylim = c(0,dim(dom7.1)[2]), main = 'dom; chr7'); abline(h = dim(dom7.1)[2]/10, col = 'blue')
+
+# rjf
+rjf7.1.s.c0<-apply(rjf7.1,1,function(x) sum(is.na(x))) 
+plot(rjf7.1.s.c0, ylim = c(0,dim(rjf7.1)[2]), main = 'rjf; chr7'); abline(h = dim(rjf7.1)[2]/10, col = 'blue')
+```
+
+### Remove Samples with High Missing Values (Chrom 7)
+```{r}
+# ber; chr7
+rm_n <- sum(ber7.1.s.c0>=dim(ber7.1)[2]/10)
+rm_names <- names(ber7.1.s.c0)[!ber7.1.s.c0<dim(ber7.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+ber7.1 <- ber7.1[ber7.1.s.c0<dim(ber7.1)[2]/10, ]
+print(glue("Samples removed from ber_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(ber7.1)
+
+# dom; chr7
+rm_n <- sum(dom7.1.s.c0>=dim(dom7.1)[2]/10)
+rm_names <- names(dom7.1.s.c0)[!dom7.1.s.c0<dim(dom7.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+dom7.1 <- dom7.1[dom7.1.s.c0<dim(dom7.1)[2]/10, ]
+print(glue("Samples removed from dom_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(dom7.1)
+
+# rjf; chr7
+rm_n <- sum(rjf7.1.s.c0>=dim(rjf7.1)[2]/10)
+rm_names <- names(rjf7.1.s.c0)[!rjf7.1.s.c0<dim(rjf7.1)[2]/10]
+if(length(rm_names) == 0){rm_names <- 'none'}
+rjf7.1 <- rjf7.1[rjf7.1.s.c0<dim(rjf7.1)[2]/10, ]
+print(glue("Samples removed from rjf_chr7: {rm_n}; {paste0(rm_names, collapse = ',')}"))
+dim(rjf7.1)
+```
+
+# Subset only the shared samples and shared features between matrices
+Note: Finished matrices should have the same dimensions for each chromosome
+Note: All samples are the same between chromosomes
+
+## Shared Features
+
+### Shared Features (Chrom 1)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber1.1)[colnames(ber1.1) %in% colnames(dom1.1)]
+shared_p2 <- colnames(rjf1.1)[colnames(rjf1.1) %in% colnames(ber1.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber1.1 <- ber1.1[, shared_p]
+dom1.1 <- dom1.1[, shared_p]
+rjf1.1 <- rjf1.1[, shared_p]
+```
+
+### Shared Features (Chrom 2)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber2.1)[colnames(ber2.1) %in% colnames(dom2.1)]
+shared_p2 <- colnames(rjf2.1)[colnames(rjf2.1) %in% colnames(ber2.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber2.1 <- ber2.1[, shared_p]
+dom2.1 <- dom2.1[, shared_p]
+rjf2.1 <- rjf2.1[, shared_p]
+```
+
+### Shared Features (Chrom 3)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber3.1)[colnames(ber3.1) %in% colnames(dom3.1)]
+shared_p2 <- colnames(rjf3.1)[colnames(rjf3.1) %in% colnames(ber3.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber3.1 <- ber3.1[, shared_p]
+dom3.1 <- dom3.1[, shared_p]
+rjf3.1 <- rjf3.1[, shared_p]
+```
+
+### Shared Features (Chrom 5)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber5.1)[colnames(ber5.1) %in% colnames(dom5.1)]
+shared_p2 <- colnames(rjf5.1)[colnames(rjf5.1) %in% colnames(ber5.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber5.1 <- ber5.1[, shared_p]
+dom5.1 <- dom5.1[, shared_p]
+rjf5.1 <- rjf5.1[, shared_p]
+```
+
+### Shared Features (Chrom 7)
+```{r}
+# Collect the shared features
+shared_p1 <- colnames(ber7.1)[colnames(ber7.1) %in% colnames(dom7.1)]
+shared_p2 <- colnames(rjf7.1)[colnames(rjf7.1) %in% colnames(ber7.1)]
+shared_p <- shared_p1[shared_p1 %in% shared_p2]
+
+# Create shared samples and features
+ber7.1 <- ber7.1[, shared_p]
+dom7.1 <- dom7.1[, shared_p]
+rjf7.1 <- rjf7.1[, shared_p]
+```
+
+### Print Dimensions (round 2)
+```{r}
+print("Order: ber, dom, rjf, haw")
+print('Chromosome 1')
+dim(ber1.1)
+dim(dom1.1)
+dim(rjf1.1)
+print('Chromosome 2')
+dim(ber2.1)
+dim(dom2.1)
+dim(rjf2.1)
+print('Chromosome 3')
+dim(ber3.1)
+dim(dom3.1)
+dim(rjf3.1)
+print('Chromosome 5')
+dim(ber5.1)
+dim(dom5.1)
+dim(rjf5.1)
+print('Chromosome 7')
+dim(ber7.1)
+dim(dom7.1)
+dim(rjf7.1)
+
+```
+
+# Imputation
+
+## Confirm the New Distribution of Missing Features
+
+### Missing Features (Chrom 1)
+```{r}
+# ber
+ber1.1.f.c0<-apply(ber1.1,2,function(x) sum(is.na(x))) 
+plot(ber1.1.f.c0, ylim = c(0,dim(ber1.1)[2]))
+
+# dom
+dom1.1.f.c0<-apply(dom1.1,2,function(x) sum(is.na(x))) 
+plot(dom1.1.f.c0, ylim = c(0,dim(dom1.1)[2]))
+
+# rjf
+rjf1.1.f.c0<-apply(rjf1.1,2,function(x) sum(is.na(x))) 
+plot(rjf1.1.f.c0, ylim = c(0,dim(rjf1.1)[2]))
+```
+
+### Missing Features (Chrom 2)
+```{r}
+# ber
+ber2.1.f.c0<-apply(ber2.1,2,function(x) sum(is.na(x))) 
+plot(ber2.1.f.c0, ylim = c(0,dim(ber2.1)[2]))
+
+# dom
+dom2.1.f.c0<-apply(dom2.1,2,function(x) sum(is.na(x))) 
+plot(dom2.1.f.c0, ylim = c(0,dim(dom2.1)[2]))
+
+# rjf
+rjf2.1.f.c0<-apply(rjf2.1,2,function(x) sum(is.na(x))) 
+plot(rjf2.1.f.c0, ylim = c(0,dim(rjf2.1)[2]))
+```
+
+### Missing Features (Chrom 3)
+```{r}
+# ber
+ber3.1.f.c0<-apply(ber3.1,2,function(x) sum(is.na(x))) 
+plot(ber3.1.f.c0, ylim = c(0,dim(ber3.1)[2]))
+
+# dom
+dom3.1.f.c0<-apply(dom3.1,2,function(x) sum(is.na(x))) 
+plot(dom3.1.f.c0, ylim = c(0,dim(dom3.1)[2]))
+
+# rjf
+rjf3.1.f.c0<-apply(rjf3.1,2,function(x) sum(is.na(x))) 
+plot(rjf3.1.f.c0, ylim = c(0,dim(rjf3.1)[2]))
+```
+
+### Missing Features (Chrom 5)
+```{r}
+# ber
+ber5.1.f.c0<-apply(ber5.1,2,function(x) sum(is.na(x))) 
+plot(ber5.1.f.c0, ylim = c(0,dim(ber5.1)[2]))
+
+# dom
+dom5.1.f.c0<-apply(dom5.1,2,function(x) sum(is.na(x))) 
+plot(dom5.1.f.c0, ylim = c(0,dim(dom5.1)[2]))
+
+# rjf
+rjf5.1.f.c0<-apply(rjf5.1,2,function(x) sum(is.na(x))) 
+plot(rjf5.1.f.c0, ylim = c(0,dim(rjf5.1)[2]))
+```
+
+### Missing Features (Chrom 7)
+```{r}
+# ber
+ber7.1.f.c0<-apply(ber7.1,2,function(x) sum(is.na(x))) 
+plot(ber7.1.f.c0, ylim = c(0,dim(ber7.1)[2]))
+
+# dom
+dom7.1.f.c0<-apply(dom7.1,2,function(x) sum(is.na(x))) 
+plot(dom7.1.f.c0, ylim = c(0,dim(dom7.1)[2]))
+
+# rjf
+rjf7.1.f.c0<-apply(rjf7.1,2,function(x) sum(is.na(x))) 
+plot(rjf7.1.f.c0, ylim = c(0,dim(rjf7.1)[2]))
+```
+
+## Imputation: A seperate object will be created with imputed data ... imputated variants will not be considered entirely trustworthy
+
+### Impute Missing values (Chrome 1)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber1.1.2<-impute.knn(ber1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber1.1[,ber1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber1.1.2[, ber1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber1.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom1.1.2<-impute.knn(dom1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom1.1[,dom1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom1.1.2[, dom1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom1.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf1.1.2<-impute.knn(rjf1.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf1.1[,rjf1.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf1.1.2[, rjf1.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf1.1.2))}")
+```
+
+### Impute Missing values (Chrome 2)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber2.1.2<-impute.knn(ber2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber2.1[,ber2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber2.1.2[, ber2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber2.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom2.1.2<-impute.knn(dom2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom2.1[,dom2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom2.1.2[, dom2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom2.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf2.1.2<-impute.knn(rjf2.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf2.1[,rjf2.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf2.1.2[, rjf2.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf2.1.2))}")
+```
+
+### Impute Missing values (Chrome 3)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber3.1.2<-impute.knn(ber3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(ber3.1[,ber3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(ber3.1.2[, ber3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber3.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom3.1.2<-impute.knn(dom3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom3.1[,dom3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom3.1.2[, dom3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom3.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf3.1.2<-impute.knn(rjf3.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf3.1[,rjf3.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf3.1.2[, rjf3.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf3.1.2))}")
+```
+
+### Impute Missing values (Chrome 5)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber5.1.2<-impute.knn(ber5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+try(
+  image(as.matrix(ber5.1[,ber5.1.f.c0>0]),col=redblue100,axes=F),
+  silent=FALSE)
+try(image(as.matrix(ber5.1.2[, ber5.1.f.c0>0]),col=redblue100,axes=F),
+  silent=FALSE)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber5.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom5.1.2<-impute.knn(dom5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom5.1[,dom5.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom5.1.2[, dom5.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom5.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf5.1.2<-impute.knn(rjf5.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf5.1[,rjf5.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf5.1.2[, rjf5.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf5.1.2))}")
+```
+
+### Impute Missing values (Chrome 7)
+```{r}
+#ber
+glue("ber: features with missing values (rows) before and after imputation")
+ber7.1.2<-impute.knn(ber7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+try(image(as.matrix(ber7.1[,ber7.1.f.c0>0]),col=redblue100,axes=F))
+try(image(as.matrix(ber7.1.2[, ber7.1.f.c0>0]),col=redblue100,axes=F))
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(ber7.1.2))}")
+
+#dom
+glue("dom: features with missing values (rows) before and after imputation")
+dom7.1.2<-impute.knn(dom7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(dom7.1[,dom7.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(dom7.1.2[, dom7.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(dom7.1.2))}")
+
+#rjf
+glue("rjf: features with missing values (rows) before and after imputation")
+rjf7.1.2<-impute.knn(rjf7.1,k=100)$data
+#view the features before and after imputation
+par(mfrow=c(2,1),bg="black")
+image(as.matrix(rjf7.1[,rjf7.1.f.c0>0]),col=redblue100,axes=F)
+image(as.matrix(rjf7.1.2[, rjf7.1.f.c0>0]),col=redblue100,axes=F)
+par(mfrow=c(1,1) ,bg="white")
+glue("Verified no missing values: {sum(is.na(rjf7.1.2))}")
+```
+
+# Create Sample Annotation Matrices and Combine Data
+
+### Create Sample Annotation Matrix (Chrom 1)
+```{r}
+all_df1$DP1_med <- all_df1$DP2_med <- all_df1$DP3_med <- all_df1$DP5_med <- all_df1$DP7_med <- NA
+all_df1$GQ1_med <- all_df1$GQ2_med <- all_df1$GQ3_med <- all_df1$GQ5_med <- all_df1$GQ7_med <- NA
+sam_ann_mat1.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber1.1), rownames(dom1.1), rownames(rjf1.1)) )%>%
+  filter(CHROM == 'chr1') %>%
+  filter(POS %in% colnames(ber1.1)) %>%
+  group_by(sample) %>%
+  mutate(DP1.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ1.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP1.1_med, GQ1.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat1.1
+plot(sam_ann_mat1.1[,4],sam_ann_mat1.1[,5])
+```
+
+### Create Sample Annotation Matrix (Chrom 2)
+```{r}
+sam_ann_mat2.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber2.1), rownames(dom2.1), rownames(rjf2.1)) )%>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS %in% colnames(ber2.1)) %>%
+  group_by(sample) %>%
+  mutate(DP2.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ2.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP2.1_med, GQ2.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat2.1
+plot(sam_ann_mat2.1[,4],sam_ann_mat2.1[,5])
+```
+
+### Create Sample Annotation Matrix (Chrom 3)
+```{r}
+sam_ann_mat3.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber3.1), rownames(dom3.1), rownames(rjf3.1)) )%>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS %in% colnames(ber3.1)) %>%
+  group_by(sample) %>%
+  mutate(DP3.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ3.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP3.1_med, GQ3.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat3.1
+plot(sam_ann_mat3.1[,4],sam_ann_mat3.1[,5])
+```
+
+### Create Sample Annotation Matrix (Chrom 5)
+```{r}
+sam_ann_mat5.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber5.1), rownames(dom5.1), rownames(rjf5.1)) )%>%
+  filter(CHROM == 'chr5') %>%
+  filter(POS %in% colnames(ber5.1)) %>%
+  group_by(sample) %>%
+  mutate(DP5.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ5.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP5.1_med, GQ5.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_mat5.1
+plot(sam_ann_mat5.1[,4],sam_ann_mat5.1[,5])
+```
+
+### Create Sample Annotation Matrix (Chrom 7)
+```{r}
+sam_ann_mat7.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber7.1), rownames(dom7.1), rownames(rjf7.1)) )%>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS %in% colnames(ber7.1)) %>%
+  group_by(sample) %>%
+  mutate(DP7.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ7.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP7.1_med, GQ7.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample') %>%
+  as.matrix()
+
+sam_ann_df7.1 <- all_df1 %>%
+  filter(sample %in% c(rownames(ber7.1), rownames(dom7.1), rownames(rjf7.1)) ) %>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS %in% colnames(ber7.1)) %>%
+  group_by(sample) %>%
+  mutate(DP7.1_med = median(DP, na.rm = TRUE)) %>%
+  mutate(GQ7.1_med = median(GQ, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(sample, cohort, dom, pooled, DP7.1_med, GQ7.1_med) %>% unique() %>%
+  mutate(cohort = case_when(cohort == 'dom' ~ 1,
+                            cohort == 'ber' ~ 2,
+                            cohort == 'rjf' ~ 3)) %>%
+  arrange(cohort, pooled, sample) %>%
+  column_to_rownames(var = 'sample')
+
+sam_ann_mat7.1
+
+plot(sam_ann_mat7.1[,4],sam_ann_mat7.1[,5])
+sam_ann_df7.1 %>%
+  mutate(cohort = factor(cohort)) %>%
+  ggplot(aes(x = DP7.1_med,y=GQ7.1_med, color = cohort)) +
+  geom_point()
+
+
+```
+
+## Combine the cohort matrixes into multiple cohorts and single chromosome 
+
+### Combine cohort matrices (Chrom 1)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber1.1.2) == colnames(dom1.1.2))
+all(colnames(dom1.1.2) == colnames(rjf1.1.2))
+
+# Create matrix (imputed)
+all1.1.2 <- rbind(ber1.1.2, dom1.1.2, rjf1.1.2)
+
+# Rearrange matrix sample order
+all1.1.2 <- all1.1.2[rownames(sam_ann_mat1.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber1.1) == colnames(dom1.1))
+all(colnames(dom1.1) == colnames(rjf1.1))
+
+# Create matrix (imputed)
+all1.1 <- rbind(ber1.1, dom1.1, rjf1.1)
+
+# Rearrange matrix sample order
+all1.1 <- all1.1[rownames(sam_ann_mat1.1),]
+
+### Z-Transformed matrices
+# ber
+image(ber1.1.2)
+image(log2(ber1.1.2))
+image(log2(ber1.1.2+1))
+
+ber.f.mean <- apply(log2(ber1.1.2+1), 2, mean)
+ber.f.sd <- apply(log2(ber1.1.2+1), 2, sd)
+plot(ber.f.mean,ber.f.sd)
+
+ber1.3a <- ber1.1.2
+for (i in 1:dim(ber1.1.2)[1]) {
+  ber1.3a[,i]<-(log2(ber1.1.2[,i] + 1)- ber.f.mean[i])/ ber.f.sd[i]
+}
+
+# dom
+image(dom1.1.2)
+image(log2(dom1.1.2))
+image(log2(dom1.1.2+1))
+
+dom.f.mean <- apply(log2(dom1.1.2+1), 2, mean)
+dom.f.sd <- apply(log2(dom1.1.2+1), 2, sd)
+plot(dom.f.mean,dom.f.sd)
+
+dom1.3a <- dom1.1.2
+for (i in 1:dim(dom1.1.2)[1]) {
+  dom1.3a[,i]<-(log2(dom1.1.2[,i] + 1)- dom.f.mean[i])/ dom.f.sd[i]
+}
+
+# rjf
+image(rjf1.1.2)
+image(log2(rjf1.1.2))
+image(log2(rjf1.1.2+1))
+
+rjf.f.mean <- apply(log2(rjf1.1.2+1), 2, mean)
+rjf.f.sd <- apply(log2(rjf1.1.2+1), 2, sd)
+plot(rjf.f.mean,rjf.f.sd)
+
+rjf1.3a <- rjf1.1.2
+for (i in 1:dim(rjf1.1.2)[1]) {
+  rjf1.3a[,i]<-(log2(rjf1.1.2[,i] + 1)- rjf.f.mean[i])/ rjf.f.sd[i]
+}
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber1.3a) == colnames(dom1.3a))
+all(colnames(dom1.3a) == colnames(rjf1.3a))
+
+# Create matrix (imputed)
+all1.3a <- rbind(ber1.3a, dom1.3a, rjf1.3a)
+
+# Rearrange matrix sample order
+all1.3a <- all1.3a[rownames(sam_ann_mat1.1),]
+
+```
+
+### Combine cohort matrices (Chrom 2)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber2.1.2) == colnames(dom2.1.2))
+all(colnames(dom2.1.2) == colnames(rjf2.1.2))
+
+# Create matrix (imputed)
+all2.1.2 <- rbind(ber2.1.2, dom2.1.2, rjf2.1.2)
+
+# Rearrange matrix sample order
+all2.1.2 <- all2.1.2[rownames(sam_ann_mat2.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber2.1) == colnames(dom2.1))
+all(colnames(dom2.1) == colnames(rjf2.1))
+
+# Create matrix (imputed)
+all2.1 <- rbind(ber2.1, dom2.1, rjf2.1)
+
+# Rearrange matrix sample order
+all2.1 <- all2.1[rownames(sam_ann_mat2.1),]
+```
+
+### Combine cohort matrices (Chrom 3)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber3.1.2) == colnames(dom3.1.2))
+all(colnames(dom3.1.2) == colnames(rjf3.1.2))
+
+# Create matrix (imputed)
+all3.1.2 <- rbind(ber3.1.2, dom3.1.2, rjf3.1.2)
+
+# Rearrange matrix sample order
+all3.1.2 <- all3.1.2[rownames(sam_ann_mat3.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber3.1) == colnames(dom3.1))
+all(colnames(dom3.1) == colnames(rjf3.1))
+
+# Create matrix (imputed)
+all3.1 <- rbind(ber3.1, dom3.1, rjf3.1)
+
+# Rearrange matrix sample order
+all3.1 <- all3.1[rownames(sam_ann_mat3.1),]
+```
+
+### Combine cohort matrices (Chrom 5)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber5.1.2) == colnames(dom5.1.2))
+all(colnames(dom5.1.2) == colnames(rjf5.1.2))
+
+# Create matrix (imputed)
+all5.1.2 <- rbind(ber5.1.2, dom5.1.2, rjf5.1.2)
+
+# Rearrange matrix sample order
+all5.1.2 <- all5.1.2[rownames(sam_ann_mat5.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber5.1) == colnames(dom5.1))
+all(colnames(dom5.1) == colnames(rjf5.1))
+
+# Create matrix (imputed)
+all5.1 <- rbind(ber5.1, dom5.1, rjf5.1)
+
+# Rearrange matrix sample order
+all5.1 <- all5.1[rownames(sam_ann_mat5.1),]
+```
+
+### Combine cohort matrices (Chrom 7)
+```{r}
+## Imputed matrices
+# Check colnames are in same order
+all(colnames(ber7.1.2) == colnames(dom7.1.2))
+all(colnames(dom7.1.2) == colnames(rjf7.1.2))
+
+# Create matrix (imputed)
+all7.1.2 <- rbind(ber7.1.2, dom7.1.2, rjf7.1.2)
+
+# Rearrange matrix sample order
+all7.1.2 <- all7.1.2[rownames(sam_ann_mat7.1),]
+
+## Non-imputed matrices
+# Check colnames are in same order
+all(colnames(ber7.1) == colnames(dom7.1))
+all(colnames(dom7.1) == colnames(rjf7.1))
+
+# Create matrix (imputed)
+all7.1 <- rbind(ber7.1, dom7.1, rjf7.1)
+
+# Rearrange matrix sample order
+all7.1 <- all7.1[rownames(sam_ann_mat7.1),]
+```
+
+# Differential Allelic Frequency Tests: 2-sided, non-parametric t-tests (wilcoxon; data not centered or scaled)
+Significance Tests applied to each sweep region seperately
+
+## Sweep Region 1 (chr1:150340000-150420000)
+
+### T-test (dom vs ber) (chr1:150340000-150420000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat1.1.df <- as.data.frame(sam_ann_mat1.1)
+dom_sams1.1 <- sam_ann_mat1.1.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams1.1 <- sam_ann_mat1.1.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# T-test
+dom1.1.2 <- all1.1.2[dom_sams1.1,]
+ber1.1.2 <- all1.1.2[ber_sams1.1,]
+dim(dom1.1.2)
+dim(ber1.1.2)
+
+t.ber.dom  <- rep(0,dim(all1.1.2)[2])
+cls <- c(rep(0, dim(dom1.1.2)[1]), rep(1, dim(ber1.1.2)[1]))
+t.ber.dom <- mt.teststat(t(all1.1.2[1:75,]), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+
+```
+
+### Variants with Positive T-score (chr1:150,340,000-150,420,000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all1.1.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all1.1.2[1:75,], col = redblue100)
+image(all1.1.2[1:75,t.df.p2$P], col = redblue100)
+
+# Select the chrom specific vars
+ch1_var_df <- all_df3 %>%
+  filter(CHROM == 'chr1') %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch1_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.10) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr1') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr1:150,340,000-150,420,000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all1.1.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all1.1.2[1:75,], col = redblue100)
+image(all1.1.2[1:75,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch1_var_df <- all_df3 %>%
+  filter(CHROM == 'chr1') %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch1_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.10) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr1') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr1:150,340,000-150,420,000)
+```{r}
+# Bind dfs
+r1.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+# Visualize gg4 position by t scores
+r1.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(150340000, 150420000) +
+  theme_bw()
+
+r1.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(150340000, 150420000) +
+  theme_bw() +
+  facet_wrap(~ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r1.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+r1.t.df %>%
+  filter(ensembl_geneid != '') %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0,1) +
+  xlim(150340000, 150420000) +
+  facet_wrap(~ensembl_geneid + var_type)
+
+
+# Deleterious variants
+r1.t.df %>%
+  filter(grepl('del', SIFT))
+
+# Relavent genes (gene symbol)
+# try(
+#   r1.t.df %>%
+#   filter(ensembl_geneid != '') %>%
+#   filter(del == 'del') %>%
+#   ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign, shape = del)) +
+#   geom_point() +
+#   xlim(150340000, 150420000) +
+#   ylim(0,1) +
+#   facet_wrap(~gene_symbol + var_type)
+# )
+```
+
+### Examine the variantions of interest (chr1:150340000-150420000)
+```{r}
+r1.roi <- r1.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.11) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls, cls, cls, cls, cls, cls, cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all1.1.2[c(dom_sams1.1, dom_sams1.1),r1.roi])$colInd
+
+# Unclustered
+image(
+  cbind(all1.1.2[c(dom_sams1.1, ber_sams1.1),r1.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr1:150340000-150420000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all1.1.2[c(dom_sams1.1, ber_sams1.1),r1.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr1:150340000-150420000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+```
+
+## Sweep Region 2 (chr2:94120000-94220000)
+
+### T-test (dom vs ber) (chr2:94,120,000-94,220,000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat2.r2.df <- as.data.frame(sam_ann_mat2.1)
+dom_sams2.r2 <- sam_ann_mat2.r2.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams2.r2 <- sam_ann_mat2.r2.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom2.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 94120000) %>% filter(POS_gg4 <= 94220000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom2.r2.2 <- all2.1.2[dom_sams2.r2,r.gg5.pos]
+ber2.r2.2 <- all2.1.2[ber_sams2.r2,r.gg5.pos]
+all2.r2.2 <- all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r.gg5.pos]
+row.names(all2.r2.2)
+dim(dom2.r2.2)
+dim(ber2.r2.2)
+dim(all2.r2.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all2.r2.2)[2])
+cls <- c(rep(0, dim(dom2.r2.2)[1]), rep(1, dim(ber2.r2.2)[1]))
+t.ber.dom <- mt.teststat(t(all2.r2.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr2:94,120,000-94,220,000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all2.r2.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all2.r2.2, col = redblue100)
+image(all2.r2.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 94120000) %>% filter(POS_gg4 <= 94220000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.10) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr2:94,120,000-94,220,000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all2.r2.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all2.r2.2, col = redblue100)
+image(all2.r2.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 94120000) %>% filter(POS_gg4 <= 94220000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.10) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr2:94120000-94220000)
+```{r}
+# Bind dfs
+r2.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+# Visualize gg4 position by t scores
+r2.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(94120000,94220000) +
+  theme_bw()
+
+r2.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(94120000,94220000) +
+  theme_bw() +
+  facet_wrap(~ ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r2.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  xlim(94120000,94220000) +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+r2.t.df %>%
+  filter(ensembl_geneid != '') %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0,1) +
+  xlim(94120000,94220000) +
+  facet_wrap(~gene_symbol + var_type)
+r2.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.2) %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0.8,1) +
+  xlim(94120000,94220000) +
+  facet_wrap(~gene_symbol + var_type)
+
+# Deleterious variants
+r2.t.df %>%
+  filter(fdr <= 0.2) %>%
+  filter(gene_symbol == 'CCDC102B') %>%
+  filter(var_type == 'missense_variant')
+
+# Relavent genes (gene symbol)
+r2.t.df %>%
+  filter(ensembl_geneid != '') %>%
+  filter(del == 'del') %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign, shape = del)) +
+  geom_point() +
+  xlim(94120000,94220000) +
+  ylim(0,1) +
+  facet_wrap(~gene_symbol + var_type)
+```
+
+### Examine the variantions of interest (chr2:123740000-123800000)
+```{r}
+r2.roi <- r2.t.df %>%
+  filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.05) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r2.roi])$colInd
+hmo_dom <- heatmap(all2.1.2[c(dom_sams2.r2),r2.roi])$rowInd
+hmo_ber <- heatmap(all2.1.2[c(ber_sams2.r2),r2.roi])$rowInd
+
+# Unclustered
+image(
+  cbind(all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r2.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr2:123740000-123800000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all2.1.2[c(hmo_dom, hmo_ber),r2.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:123740000-123800000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+```
+
+## Sweep Region 3 (chr2:123740000-123800000)
+
+### T-test (dom vs ber) (chr2:123740000-123800000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat2.r2.df <- as.data.frame(sam_ann_mat2.1)
+dom_sams2.r2 <- sam_ann_mat2.r2.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams2.r2 <- sam_ann_mat2.r2.df %>%
+  filter(cohort == 2) %>% row.names()
+dim(dom2.1.2)
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom2.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% 
+  unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 123740000) %>% filter(POS_gg4 <= 123800000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom2.r2.2 <- all2.1.2[dom_sams2.r2,r.gg5.pos]
+ber2.r2.2 <- all2.1.2[ber_sams2.r2,r.gg5.pos]
+all2.r2.2 <- all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r.gg5.pos]
+row.names(all2.r2.2)
+dim(dom2.r2.2)
+dim(ber2.r2.2)
+dim(all2.r2.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all2.r2.2)[2])
+cls <- c(rep(0, dim(dom2.r2.2)[1]), rep(1, dim(ber2.r2.2)[1]))
+t.ber.dom <- mt.teststat(t(all2.r2.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr2:123740000-123800000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all2.r2.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all2.r2.2, col = redblue100)
+image(all2.r2.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 123740000) %>% filter(POS_gg4 <= 123800000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr2:123740000-123800000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all2.r2.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all2.r2.2, col = redblue100)
+image(all2.r2.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 123740000) %>% filter(POS_gg4 <= 123800000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr2:123740000-123800000)
+```{r}
+# Bind dfs
+r3.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r3.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(123740000,123800000) +
+  theme_bw()
+
+r3.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(123740000,123800000) +
+  theme_bw() +
+  facet_wrap(~ ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r3.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  xlim(123740000,123800000) +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+# r3.t.df %>%
+#   filter(ensembl_geneid != '') %>%
+#   ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+#   geom_point() +
+#   ylim(0,1) +
+#   xlim(123740000,123800000) +
+#   facet_wrap(~ensembl_geneid + var_type)
+r3.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.1) %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0.9,1) +
+  xlim(123740000,123800000)
+  #facet_wrap(~ensembl_geneid + var_type)
+```
+
+### Examine the variantions of interest (chr2:123740000-123800000)
+```{r}
+r3.roi <- r3.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.1) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r3.roi])$colInd
+
+# Unclustered
+image(
+  cbind(all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r3.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr2:123740000-123800000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+clst_mat <- all2.1.2[c(dom_sams2.r2, ber_sams2.r2),r3.roi]
+clst_mat <- clst_mat[,hmo]
+
+# Clustered
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:123740000-123800000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+```
+
+## Sweep Region 4 (chr2:123740000-123800000)
+
+### T-test (dom vs ber) (chr2:123740000-123800000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat2.r4.df <- as.data.frame(sam_ann_mat2.1)
+dom_sams2.r4 <- sam_ann_mat2.r4.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams2.r4 <- sam_ann_mat2.r4.df %>%
+  filter(cohort == 2) %>% row.names()
+rjf_sams2.r4 <- sam_ann_mat2.r4.df %>%
+  filter(cohort == 3) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom2.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 142940000) %>% filter(POS_gg4 <= 143220000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom2.r4.2 <- all2.1.2[dom_sams2.r4,r.gg5.pos]
+ber2.r4.2 <- all2.1.2[ber_sams2.r4,r.gg5.pos]
+all2.r4.2 <- all2.1.2[c(dom_sams2.r4, ber_sams2.r4),r.gg5.pos]
+row.names(all2.r4.2)
+dim(dom2.r4.2)
+dim(ber2.r4.2)
+dim(all2.r4.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all2.r4.2)[2])
+cls <- c(rep(0, dim(dom2.r4.2)[1]), rep(1, dim(ber2.r4.2)[1]))
+t.ber.dom <- mt.teststat(t(all2.r4.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+
+# Create a sequence of numbers between -10 and 10 incrementing by 0.1.
+x <- seq(-4, 4, by = .001)
+
+# Choose the mean as 2.5 and standard deviation as 0.5.
+y <- dnorm(x, mean = 0, sd = 1)
+
+plot(x,y)
+
+```
+
+### Variants with Positive T-score (chr2:142940000-143220000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all2.r4.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+
+image(all2.r4.2, col = redblue100)
+image(all2.r4.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 142940000) %>% filter(POS_gg4 <= 143220000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr2:142940000-143220000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all2.r4.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all2.r4.2, col = redblue100)
+image(all2.r4.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr2') %>%
+  filter(POS_gg4 >= 142940000) %>% filter(POS_gg4 <= 143220000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr2') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr2:142940000-143220000)
+```{r}
+# Bind dfs
+r4.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r4.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(142940000,143220000) +
+  theme_bw()
+
+r4.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(142940000,143220000) +
+  theme_bw() +
+  facet_wrap(~ ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r4.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  xlim(142940000,143220000) +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+r4.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0.95,1) +
+  xlim(142940000,143220000) +
+  facet_wrap(~var_type)
+```
+
+### Examine the variantions of interest (chr2:142940000-143220000)
+```{r}
+r4.roi <- r4.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.05) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,
+               cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,
+               cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls,cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all2.1.2[c(dom_sams2.r4, ber_sams2.r4),r4.roi])$colInd
+
+# Unclustered
+image(
+  cbind(all2.1.2[c(dom_sams2.r4, ber_sams2.r4),r4.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all2.1.2[c(dom_sams2.r4, ber_sams2.r4),r4.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+
+# If we don't use a t-test
+##########################
+# Unclustered
+image(
+  cbind(all2.1.2[c(dom_sams2.r4, ber_sams2.r4),], sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all2.1.2[c(dom_sams2.r4, ber_sams2.r4),]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+##########################
+
+# Add RJF
+
+cls2 <- c(cls, rep(0.5,length(rjf_sams2.r4)))
+sidebar<-cbind(cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,
+               cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,
+               cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2,cls2)
+sidebar <- sidebar*3
+
+hmo_dom <- heatmap(all2.1.2[c(dom_sams2.r4),r4.roi])$rowInd
+hmo_ber <- heatmap(all2.1.2[c(ber_sams2.r4),r4.roi])$rowInd
+hmo_ber <- hmo_ber + length(hmo_dom)
+hmo_rjf <- heatmap(all2.1.2[c(rjf_sams2.r4),r4.roi])$rowInd
+hmo_rjf <- hmo_rjf + length(c(hmo_dom,hmo_ber))
+#############
+# Unclustered
+image(
+  cbind(all2.1.2[c(dom_sams2.r4, ber_sams2.r4,rjf_sams2.r4),r4.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all2.1.2[c(dom_sams2.r4, ber_sams2.r4,rjf_sams2.r4),r4.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+
+clst_mat <- all2.1.2[c(hmo_dom, hmo_ber,hmo_rjf),r4.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr2:142940000-143220000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+
+```
+
+## Sweep Region 5 (chr3:52840000-52900000)
+
+### T-test (dom vs ber) (chr3:52840000-52900000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat3.r5.df <- as.data.frame(sam_ann_mat3.1)
+dom_sams3.r5 <- sam_ann_mat3.r5.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams3.r5 <- sam_ann_mat3.r5.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom3.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 52840000) %>% filter(POS_gg4 <= 52900000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom3.r5.2 <- all3.1.2[dom_sams3.r5,r.gg5.pos]
+ber3.r5.2 <- all3.1.2[ber_sams3.r5,r.gg5.pos]
+all3.r5.2 <- all3.1.2[c(dom_sams3.r5, ber_sams3.r5),r.gg5.pos]
+row.names(all3.r5.2)
+dim(dom3.r5.2)
+dim(ber3.r5.2)
+dim(all3.r5.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all3.r5.2)[2])
+cls <- c(rep(0, dim(dom3.r5.2)[1]), rep(1, dim(ber3.r5.2)[1]))
+t.ber.dom <- mt.teststat(t(all3.r5.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr3:52840000-52900000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all3.r5.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+
+image(all3.r5.2, col = redblue100)
+image(all3.r5.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS_gg4 >= 52840000) %>% filter(POS_gg4 <= 52900000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr3') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr3:52840000-52900000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all3.r5.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all3.r5.2, col = redblue100)
+image(all3.r5.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS_gg4 >= 52840000) %>% filter(POS_gg4 <= 52900000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr3') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr3:52840000-52900000)
+```{r}
+# Bind dfs
+r5.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r5.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(52840000,52900000) +
+  theme_bw()
+
+r5.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(52840000,52900000) +
+  theme_bw() +
+  facet_wrap(~ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r5.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  xlim(52840000,52900000) +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+r5.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0.95,1) +
+  xlim(52840000,52900000) +
+  facet_wrap(~var_type)
+```
+
+### Examine the variantions of interest (chr3:52840000-52900000)
+```{r}
+r5.roi <- r5.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.05) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls,cls,cls,cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all3.1.2[c(dom_sams3.r5, ber_sams3.r5),r5.roi])$colInd
+
+# Unclustered
+image(
+  cbind(all3.1.2[c(dom_sams3.r5, ber_sams3.r5),r5.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr3:52840000-52900000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+# Clustered
+clst_mat <- all3.1.2[c(dom_sams3.r5, ber_sams3.r5),r5.roi]
+clst_mat <- clst_mat[,hmo]
+image(
+  cbind(clst_mat, sidebar),
+  col=redblue100,axes=F,main=glue("chr3:52840000-52900000, Cohort Order, Clustered"), asp = 1,
+  zlim=c(0,3))
+```
+
+## Sweep Region 6 (chr3:92900000-92960000)
+
+### T-test (dom vs ber) (chr3:92900000-92960000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat3.r6.df <- as.data.frame(sam_ann_mat3.1)
+dom_sams3.r6 <- sam_ann_mat3.r6.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams3.r6 <- sam_ann_mat3.r6.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom3.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 92900000) %>% filter(POS_gg4 <= 92960000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom3.r6.2 <- all3.1.2[dom_sams3.r6,r.gg5.pos]
+ber3.r6.2 <- all3.1.2[ber_sams3.r6,r.gg5.pos]
+all3.r6.2 <- all3.1.2[c(dom_sams3.r6, ber_sams3.r6),r.gg5.pos]
+row.names(all3.r6.2)
+dim(dom3.r6.2)
+dim(ber3.r6.2)
+dim(all3.r6.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all3.r6.2)[2])
+cls <- c(rep(0, dim(dom3.r6.2)[1]), rep(1, dim(ber3.r6.2)[1]))
+t.ber.dom <- mt.teststat(t(all3.r6.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr3:92900000-92960000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all3.r6.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+
+image(all3.r6.2, col = redblue100)
+image(all3.r6.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS_gg4 >= 92900000) %>% filter(POS_gg4 <= 92960000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr3') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr3:92900000-92960000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all3.r6.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all3.r6.2, col = redblue100)
+image(all3.r6.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr3') %>%
+  filter(POS_gg4 >= 92900000) %>% filter(POS_gg4 <= 92960000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr3') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr3:92900000-92960000)
+```{r}
+# Bind dfs
+r6.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r6.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(92900000,92960000) +
+  theme_bw()
+
+r6.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(92900000,92960000) +
+  theme_bw() +
+  facet_wrap(~ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r6.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  xlim(92900000,92960000) +
+  facet_wrap(~var_type)
+
+# Relavent genes (geneid)
+r6.t.df %>%
+  filter(fdr <= 0.1) %>%
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0.90,1) +
+  xlim(92900000,92960000) +
+  facet_wrap(~var_type)
+```
+
+### Examine the variantions of interest (chr3:92900000-92960000)
+```{r}
+r6.roi <- r6.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(fdr <= 0.1) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls)
+sidebar <- sidebar*3
+
+# Unclustered
+image(
+  cbind(all3.1.2[c(dom_sams3.r6, ber_sams3.r6),r6.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr3:92900000-92960000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+```
+
+## Sweep Region 7 (chr5:3700000-3960000)
+
+### T-test (dom vs ber) (chr5:3700000-3960000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat5.r7.df <- as.data.frame(sam_ann_mat5.1)
+dom_sams5.r7 <- sam_ann_mat5.r7.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams5.r7 <- sam_ann_mat5.r7.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom5.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 3700000) %>% filter(POS_gg4 <= 3960000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom5.r7.2 <- all5.1.2[dom_sams5.r7,r.gg5.pos]
+ber5.r7.2 <- all5.1.2[ber_sams5.r7,r.gg5.pos]
+all5.r7.2 <- all5.1.2[c(dom_sams5.r7, ber_sams5.r7),r.gg5.pos]
+row.names(all5.r7.2)
+dim(dom5.r7.2)
+dim(ber5.r7.2)
+dim(all5.r7.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all5.r7.2)[2])
+cls <- c(rep(0, dim(dom5.r7.2)[1]), rep(1, dim(ber5.r7.2)[1]))
+t.ber.dom <- mt.teststat(t(all5.r7.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr5:3700000-3960000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all5.r7.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+
+image(all5.r7.2, col = redblue100)
+image(all5.r7.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr5') %>%
+  filter(POS_gg4 >= 3700000) %>% filter(POS_gg4 <= 3960000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr5') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr5:3700000-3960000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all5.r7.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all5.r7.2, col = redblue100)
+image(all5.r7.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr5') %>%
+  filter(POS_gg4 >= 3700000) %>% filter(POS_gg4 <= 3960000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr5') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr5:3700000-3960000)
+```{r}
+# Bind dfs
+r7.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r7.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(3700000,3960000) +
+  theme_bw()
+
+r7.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(3700000,3960000) +
+  theme_bw() + 
+  geom_abline(intercept = 3, slope =0, color = 'blue', size = 0.25) +
+  facet_wrap(~ ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r7.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0,1) +
+  xlim(3700000,3960000) +
+  facet_wrap(~var_type)
+
+r7.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = abs(t_val), color = t_sign)) +
+  geom_point() +
+  xlim(3700000,3960000)
+
+r7.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = abs(t_val), color = t_sign)) +
+  geom_point() +
+  xlim(3700000,3960000) +
+  facet_wrap(~var_type)
+```
+
+### Examine the variantions of interest (chr5:3700000-3960000)
+```{r}
+r7.roi <- r7.t.df %>%
+  filter(ensembl_geneid == 'ENSGALG00000012153') %>%
+  filter(var_type %in% c('missense_variant','stop_gained') | grepl('splice', var_type)) %>%
+  arrange(desc(POS)) %>%
+  filter(VEP_ANN_N == 1) %>%
+  #filter(fdr <= 0.1) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+r7.t.df %>%
+  filter(ensembl_geneid == 'ENSGALG00000012153') %>%
+  filter(var_type %in% c('missense_variant','stop_gained') | grepl('splice', var_type)) %>%
+  arrange(desc(POS)) %>%
+  filter(VEP_ANN_N == 1) %>%
+  select(POS_gg4,t_val,p_val,fdr,REF,ALT,var_type,SIFT)
+  
+# Ann
+sidebar<-cbind(cls)
+sidebar <- sidebar*3
+
+# Unclustered
+image(
+  cbind(all5.1.2[c(dom_sams5.r7, ber_sams5.r7),r7.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr5:3700000-3960000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+
+```
+
+## Sweep Region 8 (chr7:19320000-19380000)
+
+### T-test (dom vs ber) (chr7:19320000-19380000)
+```{r}
+# Perform a differential genotype test between domestic and bermuda
+sam_ann_mat7.r8.df <- as.data.frame(sam_ann_mat7.1)
+dom_sams7.r8 <- sam_ann_mat7.r8.df %>%
+  filter(cohort == 1) %>% row.names()
+ber_sams7.r8 <- sam_ann_mat7.r8.df %>%
+  filter(cohort == 2) %>% row.names()
+
+# Collect the region specific snps
+r.gg5.pos <- all_df3 %>%
+  filter(POS %in% colnames(dom7.1.2)) %>%
+  select(CHROM,POS,CHROM_gg4,POS_gg4) %>% unique() %>%
+  arrange(POS_gg4) %>%
+  filter(POS_gg4 >= 19320000) %>% filter(POS_gg4 <= 19380000) %>%
+  select(POS) %>% unlist() %>% unname() %>% as.character()
+
+# Collect region specific locations
+dom7.r8.2 <- all7.1.2[dom_sams7.r8,r.gg5.pos]
+ber7.r8.2 <- all7.1.2[ber_sams7.r8,r.gg5.pos]
+all7.r8.2 <- all7.1.2[c(dom_sams7.r8, ber_sams7.r8),r.gg5.pos]
+row.names(all7.r8.2)
+dim(dom7.r8.2)
+dim(ber7.r8.2)
+dim(all7.r8.2)
+
+# T-test
+t.ber.dom  <- rep(0,dim(all7.r8.2)[2])
+cls <- c(rep(0, dim(dom7.r8.2)[1]), rep(1, dim(ber7.r8.2)[1]))
+t.ber.dom <- mt.teststat(t(all7.r8.2), cls, test="wilcoxon")
+qqnorm(t.ber.dom); qqline(t.ber.dom)
+qqnorm(t.ber.dom, ylim = c(-6.5,6.5), xlim = c(-4,4)); qqline(t.ber.dom)
+```
+
+### Variants with Positive T-score (chr7:19320000-19380000)
+```{r}
+# Positive t-scores
+t.df.p <- data.frame('P' = colnames(all7.r8.2), 't_val' = t.ber.dom) %>%
+  filter(t_val > 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.p2 <- t.df.p %>% filter(!is.na(t_val))
+t.df.p2 <- t.df.p2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+
+image(all7.r8.2, col = redblue100)
+image(all7.r8.2[,t.df.p2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS_gg4 >= 19320000) %>% filter(POS_gg4 <= 19380000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.p2 <- t.df.p2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.p <- t.df.p2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr7') %>% 
+  filter(POS %in% t.sig.p) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Variants with Negative T-score (chr7:19320000-19380000)
+```{r}
+# Negative t-scores
+t.df.n <- data.frame('P' = colnames(all7.r8.2), 't_val' = t.ber.dom) %>%
+  filter(t_val < 0) %>%
+  rowwise() %>%
+  mutate(p_val = 2*(1-stats::pnorm(abs(t_val)))) %>%
+  ungroup() %>%
+  arrange(p_val)
+
+t.df.n2 <- t.df.n %>% filter(!is.na(t_val))
+t.df.n2 <- t.df.n2 %>% mutate(fdr = p.adjust(p_val, method = "fdr", n = length(t.ber.dom)))
+  
+image(all7.r8.2, col = redblue100)
+image(all7.r8.2[,t.df.n2$P], col = redblue100)
+
+# Select the chrom 2 specific vars
+ch2_var_df <- all_df3 %>%
+  filter(CHROM == 'chr7') %>%
+  filter(POS_gg4 >= 19320000) %>% filter(POS_gg4 <= 19380000) %>%
+  select(POS, POS_gg4, REF, ALT, VEP_ANN_N, var_type, var_impact, gene_symbol, ensembl_geneid, SIFT, protein_domains, exon1, exon2, transcript_type, transcript, ensembl_transcript) %>%
+  unique() %>%
+  mutate(P = as.character(POS))
+
+# Examine the ranked list of potential variants
+t.df.n2 <- t.df.n2 %>%
+  left_join(y = ch2_var_df, by = c('P'))
+
+# Select significantly different GT averages based on hypothesis test
+t.sig.n <- t.df.n2 %>%
+  filter(fdr<=0.05) %>%
+  select(P) %>% unlist() %>% unname()
+# Visualize those averages
+all_df3 %>%
+  filter(CHROM == 'chr7') %>% filter(POS %in% t.sig.n) %>%
+  select(gene_symbol, var_type) %>%
+  table()
+```
+
+### Visualize the t-scores by location (chr7:19320000-19380000)
+```{r}
+# Bind dfs
+r8.t.df <- rbind(t.df.p2, t.df.n2) %>%
+  mutate(t_sign = ifelse(t_val >0, 'pos', 'neg')) %>%
+  mutate(t_val_abs = abs(t_val)) %>%
+  mutate(del = ifelse(grepl('del', SIFT), 'del', 'tol'))
+
+r8.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(19320000,19380000) +
+  theme_bw()
+
+r8.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = t_val_abs, color = t_sign)) +
+  geom_point() + 
+  ylim(0,6.5) +
+  xlim(19320000,19380000) +
+  theme_bw() +
+  facet_wrap(~ ensembl_geneid + var_type)
+
+# Visualize gg4 position by t scores
+r8.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = abs(t_val), color = t_sign)) +
+  geom_point() +
+  xlim(19320000,19380000) +
+  facet_wrap(~var_type + gene_symbol)
+
+# Visualize gg4 position by t scores
+r8.t.df %>%
+  #select(POS_gg4, t_val, p_val, fdr, var_type, var_impact, gene_symbol, ensembl_geneid)
+  ggplot(aes(x = POS_gg4, y = 1-fdr, color = t_sign)) +
+  geom_point() +
+  ylim(0,1) +
+  xlim(19320000,19380000) +
+  facet_wrap(~var_type + gene_symbol)
+```
+
+### Examine the variantions of interest (chr7:19320000-19380000)
+```{r}
+r8.roi <- r8.t.df %>%
+  #filter(ensembl_geneid != '') %>%
+  filter(t_val_abs >= 2.5) %>%
+  select(P) %>% unique() %>% unlist() %>% unname()
+
+# Ann
+sidebar<-cbind(cls)
+sidebar <- sidebar*3
+
+hmo <- heatmap(all7.1.2[c(dom_sams7.r8, ber_sams7.r8),r8.roi])$colInd
+
+# Unclustered
+image(
+  cbind(all7.1.2[c(dom_sams7.r8, ber_sams7.r8),r8.roi], sidebar),
+  col=redblue100,axes=F,main=glue("chr7:19320000-19380000, Cohort Order, Unclustered"), asp = 1,
+  zlim=c(0,3))
+```
+
+# Examine the significantly different mutations by adjacent sequences (Investigation of poly-adenylated tracks)
+Conclusion: The polyA hypothesis is not supported
+```{r}
+library("BSgenome")
+library("BSgenome.Ggallus.UCSC.galGal4")
+
+
+r1.t.df %>%
+  select(P, POS, POS_gg4)
+
+r1.t.df$CHROM <- 'chr1'
+r1.t.df$SWEEP <- '1'
+r1.t.df$SEQ_ps <- getSeq(Ggallus, names = r1.t.df$CHROM, start=r1.t.df$POS_gg4-10, end=r1.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r2.t.df$CHROM <- 'chr2'
+r2.t.df$SWEEP <- '2'
+r2.t.df$SEQ_ps <- getSeq(Ggallus, names = r2.t.df$CHROM, start=r2.t.df$POS_gg4-10, end=r2.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r3.t.df$CHROM <- 'chr2'
+r3.t.df$SWEEP <- '3'
+r3.t.df$SEQ_ps <- getSeq(Ggallus, names = r3.t.df$CHROM, start=r3.t.df$POS_gg4-10, end=r3.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r4.t.df$CHROM <- 'chr2'
+r4.t.df$SWEEP <- '4'
+r4.t.df$SEQ_ps <- getSeq(Ggallus, names = r4.t.df$CHROM, start=r4.t.df$POS_gg4-10, end=r4.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r5.t.df$CHROM <- 'chr3'
+r5.t.df$SWEEP <- '5'
+r5.t.df$SEQ_ps <- getSeq(Ggallus, names = r5.t.df$CHROM, start=r5.t.df$POS_gg4-10, end=r5.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r6.t.df$CHROM <- 'chr3'
+r6.t.df$SWEEP <- '6'
+r6.t.df$SEQ_ps <- getSeq(Ggallus, names = r6.t.df$CHROM, start=r6.t.df$POS_gg4-10, end=r6.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r7.t.df$CHROM <- 'chr5'
+r7.t.df$SWEEP <- '7'
+r7.t.df$SEQ_ps <- getSeq(Ggallus, names = r7.t.df$CHROM, start=r7.t.df$POS_gg4-10, end=r7.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+r8.t.df$CHROM <- 'chr7'
+r8.t.df$SWEEP <- '8'
+r8.t.df$SEQ_ps <- getSeq(Ggallus, names = r8.t.df$CHROM, start=r8.t.df$POS_gg4-10, end=r8.t.df$POS_gg4+10,
+       strand="+", as.character=TRUE)
+
+allr.t.df <- rbind(r1.t.df,r2.t.df,r3.t.df,r4.t.df,
+                   r5.t.df,r6.t.df,r7.t.df,r8.t.df)
+
+# Generate a column for the percentage of A's and T's
+allr.t.df$SEQ_ps <- as.character(allr.t.df$SEQ_ps)
+a_count <- str_count(allr.t.df$SEQ_ps, pattern = 'A')
+tot <- mean(nchar(allr.t.df$SEQ_ps))
+allr.t.df$PERCA <- a_count/tot
+# By T's
+t_count <- str_count(allr.t.df$SEQ_ps, pattern = 'T')
+allr.t.df$PERCT <- t_count/tot
+# Generate a column for the percentage of G's and C's
+g_count <- str_count(allr.t.df$SEQ_ps, pattern = 'G')
+allr.t.df$PERCG <- g_count/tot
+# By C's
+c_count <- str_count(allr.t.df$SEQ_ps, pattern = 'C')
+allr.t.df$PERCC <- c_count/tot
+
+
+
+
+hist(allr.t.df$PERCA)
+hist(allr.t.df$PERCC)
+
+allr.t.df %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(y = var_type, x = PERCA)) +
+  geom_boxplot() +
+  facet_wrap(~ SWEEP)
+
+allr.t.df %>%
+  filter(t_val_abs >= 3) %>%
+  ggplot(aes(x = PERCA, color = SWEEP)) +
+  geom_density()
+
+allr.t.df %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(y = var_type, x = PERCC)) +
+  geom_boxplot() +
+  facet_wrap(~ SWEEP)
+
+allr.t.df %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(x = PERCC, color = SWEEP)) +
+  geom_density()
+
+allr.t.df %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(x = PERCA, color = SWEEP)) +
+  geom_density()
+
+df_sig <- allr.t.df %>%
+  filter(fdr <= 0.05)
+
+hist(df_sig$PERCA)
+hist(df_sig$PERCC)
+
+df_sig %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(y = var_type, x = PERCA)) +
+  geom_boxplot() +
+  facet_wrap(~ SWEEP)
+
+df_sig %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(x = PERCA, color = SWEEP)) +
+  geom_density()
+
+df_sig %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(y = var_type, x = PERCC)) +
+  geom_boxplot() +
+  facet_wrap(~ SWEEP)
+
+df_sig %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(x = PERCC, color = SWEEP)) +
+  geom_density()
+
+df_sig %>%
+  filter(fdr <= 0.05) %>%
+  ggplot(aes(x = PERCA, color = SWEEP)) +
+  geom_density()
+
+df_sig %>%
+  filter(PERCA > 0.6)
+
+
+```
+
+# Session Info
+```{r Sesh}
+warnings()
+session_info()
+```
+
+`r knitr::knit_exit()`
